@@ -211,3 +211,13 @@ SQL 文本相异不代表答案不同，所以数值题按执行结果判分。T
 在项目根目录运行 `.venv/bin/python -m pytest -q`、`.venv/bin/ruff check src tests scripts`、`.venv/bin/python scripts/prepare_data.py --verify-only`、`.venv/bin/python scripts/verify_eval_suite.py`。本次全量测试 **48 passed**，Ruff **All checks passed**，三个原始数据文件哈希均匹配，数值金标复核 **79/79**。这验证固定题目的 SQL 与结果一致，**不是 Agent 模型准确率**。此外 `.venv/bin/trust-agent demo` 用真实查询完成两次工具调用；`scripts/export_demo_traces.py` 重新导出正常、危险 SQL、缺少证据三条离线轨迹。
 
 面试时可解释：“我把上下文压缩当成视图变换：Trace 是事实来源，模型输入才做裁剪和摘要。预算要把已有摘要一起算，工具调用和结果的配对也不能随意拆散。我加了低预算回归测试。真实模型评测尚需 API 凭证，我不会把金标校验率说成 Agent 准确率。”
+
+## 阶段 P2 回归修正：按真实 SDK 事件派发工具（2026-09-24）
+
+### 发现与修复
+
+复核本机 `openai` 2.x 的生成类型时发现，`ResponseFunctionCallArgumentsDoneEvent` 只有 `arguments`、`item_id`、`name` 等字段，**没有**先前假测试所用的 `item.call_id`。原实现会在真实流上抛出属性错误。`provider.py` 现在继续把参数 delta 当展示事件，但在 `response.output_item.done` 收到完整 `function_call` 输出项后，才读取 `call_id/name/arguments` 并发出 `tool_ready`；如 SDK/网络流省略该事件，还可从 `response.completed.output` 恢复一次完整调用。通过 `ready_ids` 去重，避免两个事件重复执行同一工具。状态为 `incomplete` 的输出项不会派发。
+
+### 验证与面试讲法
+
+`tests/test_provider.py` 现在直接用安装版 SDK 的 `ResponseFunctionCallArgumentsDoneEvent` 和 `ResponseOutputItemDoneEvent` 类型构造测试流，覆盖正常派发和完成响应兜底；本次单项测试 **2 passed**，全量回归 **49 passed**，Ruff **All checks passed**，源文件哈希与 **79/79** 数值金标复核仍通过。`codex mcp list` 显示本项目及两个官方文档 MCP 为 enabled。这只证明本机 SDK 事件结构与适配代码一致，仍需真实 API key 才能做端到端模型验证。面试可讲：“流式参数完成不等于完整工具输出项；我用 SDK 生成类型检查事件契约，并在输出项完成时派发，避免半截参数或缺少 call_id 导致误执行。”

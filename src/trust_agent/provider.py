@@ -29,20 +29,32 @@ class OpenAIResponsesProvider:
             model=self.model, input=messages, instructions=instructions,
             tools=tools, stream=True, store=False,
         )
+        ready_ids: set[str] = set()
         async for event in stream:
             if event.type == "response.output_text.delta":
                 yield ProviderEvent("text_delta", {"text": event.delta})
             elif event.type == "response.function_call_arguments.delta":
                 yield ProviderEvent("tool_delta", {"index": event.output_index,
                                                    "delta": event.delta})
-            elif event.type == "response.function_call_arguments.done":
+            elif event.type == "response.output_item.done":
                 item = event.item
-                yield ProviderEvent("tool_ready", {"call_id": item.call_id,
-                                                   "name": item.name,
-                                                   "arguments": item.arguments})
+                if item.type == "function_call" and item.status != "incomplete" and \
+                        item.call_id not in ready_ids:
+                    ready_ids.add(item.call_id)
+                    yield ProviderEvent("tool_ready", {"call_id": item.call_id,
+                                                       "name": item.name,
+                                                       "arguments": item.arguments})
             elif event.type == "response.completed":
                 response = event.response
                 output = [item.model_dump(exclude_none=True) for item in response.output]
+                for item in output:
+                    if item.get("type") == "function_call" and \
+                            item.get("status") != "incomplete" and \
+                            item.get("call_id") not in ready_ids:
+                        ready_ids.add(item["call_id"])
+                        yield ProviderEvent("tool_ready", {"call_id": item["call_id"],
+                                                           "name": item["name"],
+                                                           "arguments": item["arguments"]})
                 usage = response.usage.model_dump(exclude_none=True) if response.usage else {}
                 yield ProviderEvent("completed", {"output": output, "usage": usage,
                                                   "response_id": response.id})
