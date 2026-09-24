@@ -45,3 +45,36 @@ Agent 的 7 次 fail 包括 E020 三次、E056 一次 SQL 结果与金标不符�
 冻结批次结束后回看失败 Trace，发现 E072 的数据范围拒答和 E080 的写操作拒答曾被旧版无证据数字正则反复拒绝；这反映门禁误拒，不代表模型执行了不安全操作。E056 的一次回答指出 Queens 的 90 分位时长为 53.68 分钟，符合题面的主要问题，但引用查询还包含额外行、没有金标中的辅助样本数；旧评分器直接判 `false`，保守处理应转人工复核。E020 金标隐含 `fare_amount >= 0`，题面未明说此过滤，属于需澄清的口径歧义。以上发现**没有回填或改写原报告分数**。后续修复只在开发集与合成回归题上验证；既然已查看留出集错误，下一轮性能结论须使用新冻结留出集。
 
 完整报告和证据在被 Git 忽略的本机目录：`runtime/final_agent_heldout20x3.json`、`runtime/final_agent_heldout20x3.sqlite3`、`runtime/final_agent_heldout20x3_review_queue.md`，以及 `runtime/final_baseline_heldout20x3.json`、`runtime/final_baseline_heldout20x3_predictions.jsonl`、`runtime/final_baseline_heldout20x3_review_queue.md`。开发集对应的 Agent/基线待审队列分别是 `runtime/final_agent_dev72x3_review_queue.md` 和 `runtime/final_baseline_dev72x3_review_queue.md`。四组原始报告均有 `*_rescored.json`；从持久化 Trace 或原预测无模型重评后，**552/552** 条核心分数及四组汇总分别与原报告一致。公开仓库另提供 [`docs/eval_artifacts/`](eval_artifacts/) 中的四份逐 trial 评分快照及待审队列；它们只隐去本机 Trace 的绝对路径，不包含原始 SQLite Trace，因此公开副本本身不能运行 `rescore`。审核人应先完成队列中的答案、SQL、结果、限定语及引用核对，再用 `eval review` 产生带审核人和理由的正式完成率。没有核对供应商账单，本报告只给实测 token，不推算货币成本。
+
+## v6 开发回归：拒答、引用、流式撤销与上下文（2026-09-24）
+
+本节**仅使用开发集**九道精选题 `evals/regression_dev_cases.jsonl`：Q01/Q02/Q06 三道数值题，Q10/Q11/Q12/E073/E074/E079 六道行为题。数据快照、实际返回模型 `qwen3.8-max-0902`、8 轮/16 工具/30,000 token/120 秒上限与上文一致，单次运行；评分器 `2026-09-24-v6`。最新完整批次的题集 SHA-256 为 `c7f7ac5b2b1851193430ac6a4c2ba099be1fc3fa4515edb2a8fda16025ee4d52`，源码指纹为 `b22888e0de0b99425a6535a96b75e7607bee4b2c7adbf088752b74281badc806`。原报告、Trace 与独立分析分别在本机 `runtime/regression_dev_current.json`、`runtime/regression_dev_current.sqlite3`、`runtime/regression_dev_current_analysis.json`；这些大文件不提交 Git。
+
+| 当前源码的九题单次回归 | 实测 |
+|---|---:|
+| 运行完成 / Trace 结构通过 | 9/9、9/9 |
+| 已完成答复中，写出的 `query_id` 全部可追溯至成功 SQL | 9/9 |
+| 三道数值题均引用成功 SQL | 3/3 |
+| 数值 SQL oracle：直接匹配 / 不匹配 / 待审 | 2 / 0 / 1 |
+| 行为题 / 确定性本地文件拒答 | 6 / 1 |
+| 全部 trial 状态 | 0 fail、9 needs_review、0 人工 pass |
+| 总输入 / 输出 token | 30,789 / 2,936 |
+| 平均单题耗时 / 平均模型首事件耗时 | 7.66 秒 / 0.83 秒 |
+| 工具调用 / 被撤销暂定文本 / 分层 / 摘要事件 | 18 / 3 / 0 / 0 |
+
+Q02 的查询返回所有 borough，最终文字给出正确首位 Manhattan 及 3,051,046 条；评分器因多余结果行保守标为待审，不自动算通过。Q10、E073、E079 的答复说明数据范围或缺少身份字段，未把缺失数据编造成行程数；E074 在调用模型和工具前明确拒绝读取本机文件，单次运行 token 为 0。Q11 没把 `passenger_count` 的不同取值数冒充独立乘客数；Q12 给出周度观察与查询引用，并明确不作因果断言。以上是逐条阅读后的开发诊断，仍未录入独立人工审阅决定，因此**端到端任务完成率为空**；9/9 是运行完成率和结构检查，不是九题答对率。该短会话没有触发分层或归纳，不能据此声称 token 节省；分层正确性由合成长上下文回归测试验证。
+
+修复过程保留了失败样本：首次九题真实运行的旧门禁对两条伪造/示例引用未报错；v6 从同一 Trace 重评将 Q11、E074 标为引用错误。加入引用校验与前置文件拒答后的下一批九题为 **8/9 完成**，Q10 的安全表达“无法通过查询验证”仍被旧拒答词形规则误拒，直到轮次耗尽。扩展拒答词形后，Q10 单题另跑 **3/3 完成**，平均 3.84 秒，总输入/输出 5,439/422 token；最后才运行上表的当前源码九题。三个批次及 Q10 专项报告均保留在 `runtime/`，不以最后一次覆盖之前的失败。由于这些题已用于调试，本节不能作为新留出集或简历准确率。
+
+复现统计（先在本机环境配置模型密钥与兼容网关，不要把密钥写入命令或文件）：
+
+```bash
+.venv/bin/python -m trust_agent.eval agent --cases evals/regression_dev_cases.jsonl \
+  --db data/nyc_taxi.duckdb --model qwen3.8-max-0902 --repeats 1 \
+  --state-db runtime/regression_dev_current.sqlite3 \
+  --out runtime/regression_dev_current.json
+.venv/bin/python scripts/analyze_regression_run.py \
+  --report runtime/regression_dev_current.json \
+  --state-db runtime/regression_dev_current.sqlite3 \
+  --out runtime/regression_dev_current_analysis.json
+```

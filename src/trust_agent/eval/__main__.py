@@ -207,6 +207,7 @@ async def _run_baseline(args: argparse.Namespace) -> None:
     observed_models = sorted({prediction["model_observed"] for prediction in predictions
                               if prediction.get("model_observed")})
     _save_json(args.out, {"model_requested": args.model,
+                          "scorer_version": SCORER_VERSION,
                           "models_observed": observed_models,
                           "provider": type(provider).__name__,
                           "generation_settings": _generation_settings(),
@@ -252,6 +253,7 @@ async def _run_agent(args: argparse.Namespace) -> None:
                               if event["kind"] in {"model_completed", "model_failed"}
                               and event["data"].get("model")})
     _save_json(args.out, {"model_requested": args.model,
+                          "scorer_version": SCORER_VERSION,
                           "models_observed": observed_models,
                           "provider": type(provider).__name__,
                           "generation_settings": _generation_settings(),

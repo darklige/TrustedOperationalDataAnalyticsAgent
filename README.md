@@ -37,6 +37,8 @@ Responses 适配器可在单个输出项完成时更早派发。某些兼容网�
 
 HTTP 接口：`POST /runs` 传入 `{"question":"..."}`，得到 `run_id`；随后 `GET /runs/{run_id}/events` 订阅 SSE。事件 ID 是持久化序列号；断线后可用 `?after=<最后收到的ID>` 重放遗漏事件。`GET /runs/{run_id}` 查看快照；`POST /runs/{run_id}/cancel` 取消当前进程中的任务。API 目前是本机开发接口，未加用户认证，请仅绑定 `127.0.0.1`。
 
+SSE 的 `text_delta` 是带 `attempt_id` 的暂定草稿。客户端应按 `attempt_id` 缓冲，收到 `text_committed` 才显示最终答复；`text_discarded` 应撤销相应草稿。终端 CLI 已按这一契约实现。`context_layered` 表示旧 SQL 结果在下一轮模型视图中缩成保留证据字段的摘要，原始 Trace 不变；如果仍超出预算，才触发旧轮次归纳。
+
 ## 实现路径
 
 ```text
@@ -68,6 +70,11 @@ HTTP 接口：`POST /runs` 传入 `{"question":"..."}`，得到 `run_id`；随�
   --db data/nyc_taxi.duckdb --report runtime/old_report.json \
   --state-db runtime/eval_agent.sqlite3 --out runtime/rescored_report.json
 .venv/bin/python scripts/verify_eval_suite.py
+.venv/bin/python -m trust_agent.eval agent --model "$TRUST_AGENT_MODEL" \
+  --cases evals/regression_dev_cases.jsonl --repeats 1 \
+  --state-db runtime/regression_dev.sqlite3 --out runtime/regression_dev.json
+.venv/bin/python scripts/analyze_regression_run.py \
+  --report runtime/regression_dev.json --state-db runtime/regression_dev.sqlite3
 ```
 
 长批次中断后，用原命令加 `--resume` 续跑；`--checkpoint` 逐 trial 持久化，

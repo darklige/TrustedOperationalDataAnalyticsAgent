@@ -227,10 +227,28 @@ def trace_assertions(events: Iterable[dict[str, Any]], *, numeric: bool) -> list
     ready: set[str] = set()
     started: set[str] = set()
     query_ids: set[str] = set()
+    provisional_attempts: set[str] = set()
+    closed_attempts: set[str] = set()
+    commits: list[dict[str, Any]] = []
     for event in items:
         kind = event.get("kind")
         data = event.get("data") or {}
         call_id = data.get("call_id")
+        if kind == "text_delta" and data.get("provisional"):
+            attempt_id = data.get("attempt_id")
+            if not isinstance(attempt_id, str) or not attempt_id or attempt_id in closed_attempts:
+                errors.append("provisional text needs an open attempt_id")
+            else:
+                provisional_attempts.add(attempt_id)
+        elif kind in {"text_discarded", "text_committed"}:
+            attempt_id = data.get("attempt_id")
+            if not isinstance(attempt_id, str) or not attempt_id or attempt_id in closed_attempts:
+                errors.append("text close needs a unique attempt_id")
+            else:
+                provisional_attempts.discard(attempt_id)
+                closed_attempts.add(attempt_id)
+            if kind == "text_committed":
+                commits.append(data)
         if kind == "tool_call_ready":
             if not call_id or call_id in ready:
                 errors.append("tool_call_ready needs a unique call_id")
@@ -247,9 +265,23 @@ def trace_assertions(events: Iterable[dict[str, Any]], *, numeric: bool) -> list
                 if query_id:
                     query_ids.add(query_id)
     completions = [event for event in items if event.get("kind") == "run_completed"]
-    if completions and numeric:
+    if provisional_attempts:
+        errors.append("provisional text left without commit or discard")
+    if commits:
+        completion_data = (completions[0].get("data") or {}) if completions else {}
+        if len(commits) != 1 or commits[0].get("text") != completion_data.get("answer") or (
+                completion_data.get("attempt_id") and
+                commits[0].get("attempt_id") != completion_data.get("attempt_id")):
+            errors.append("committed text must equal the completed answer and attempt")
+    elif any((event.get("data") or {}).get("provisional") for event in items
+             if event.get("kind") == "text_delta"):
+        errors.append("completed run lacks a text commit")
+    if completions:
         answer = (completions[0].get("data") or {}).get("answer", "")
-        if not _answer_citations(answer) & query_ids:
+        citations = _answer_citations(answer)
+        if citations - query_ids:
+            errors.append("final answer cites an unknown or non-SQL query_id")
+        if numeric and not citations & query_ids:
             errors.append("final answer cites no completed SQL query_id")
     return errors
 

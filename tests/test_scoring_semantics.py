@@ -6,6 +6,7 @@ from trust_agent.eval.scoring import (
     score_prediction,
     score_trace,
     summarize_trials,
+    trace_assertions,
 )
 from trust_agent.eval.tasks import EvalCase
 
@@ -129,3 +130,40 @@ def test_derived_answer_with_cited_raw_ratio_is_reviewed() -> None:
     assert "derived/composite" in scored.errors[0]
     events[-1]["data"]["answer"] = "20% across 2,308,273 trips [query_id:q1]"
     assert score_trace(case, events, Query()).status == "fail"
+
+
+def test_stream_contract_requires_discard_and_matching_commit() -> None:
+    events = [
+        {"seq": 1, "kind": "run_started", "data": {}},
+        {"seq": 2, "kind": "text_delta", "data": {
+            "attempt_id": "draft", "provisional": True, "text": "unsupported 3"}},
+        {"seq": 3, "kind": "text_discarded", "data": {"attempt_id": "draft"}},
+        {"seq": 4, "kind": "text_delta", "data": {
+            "attempt_id": "final", "provisional": True, "text": "cannot verify"}},
+        {"seq": 5, "kind": "text_committed", "data": {
+            "attempt_id": "final", "text": "cannot verify"}},
+        {"seq": 6, "kind": "run_completed", "data": {
+            "attempt_id": "final", "answer": "cannot verify"}},
+    ]
+    assert trace_assertions(events, numeric=False) == []
+    events.pop(2)
+    for number, event in enumerate(events, 1):
+        event["seq"] = number
+    assert "provisional text left without commit or discard" in trace_assertions(
+        events, numeric=False)
+    events.insert(2, {"seq": 3, "kind": "text_discarded", "data": {"attempt_id": "draft"}})
+    for number, event in enumerate(events, 1):
+        event["seq"] = number
+    events[-2]["data"]["text"] = "different"
+    assert "committed text must equal the completed answer and attempt" in trace_assertions(
+        events, numeric=False)
+
+
+def test_behavioral_refusal_cannot_cite_schema_as_query_result() -> None:
+    events = [
+        {"seq": 1, "kind": "run_started", "data": {}},
+        {"seq": 2, "kind": "run_completed", "data": {
+            "answer": "无法读取本机文件。[query_id:describe_data]"}},
+    ]
+    assert "final answer cites an unknown or non-SQL query_id" in trace_assertions(
+        events, numeric=False)

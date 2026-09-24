@@ -95,6 +95,14 @@ Skill 是带名称、用途、版本和内容的按需说明文件。先依据�
 
 API 使用 FastAPI SSE，先持久化再向客户端发送；事件含 `run_id`、`seq`、`type`、`payload`。客户端断线不应使已记录的结果丢失；是否继续后台运行由 API 契约显式规定。`Last-Event-ID` 或等效机制用于读取遗漏事件。CLI 显示同一事件模型，避免业务逻辑重复。
 
+### 6.1 当前实现的暂定文本契约
+
+每次模型请求有独立 `attempt_id`。`text_delta` 携带 `provisional=true`，只表示尚未通过完成与证据门禁的草稿；客户端应按 `attempt_id` 缓冲，不能当最终答复。成功时 `text_committed` 提供权威全文，随后 `run_completed` 的 `answer` 和 `attempt_id` 必须一致。模型流异常、工具轮次、token 超限或答案被拒时，以 `text_discarded` 清掉该尝试的草稿。SSE 保留暂定增量供可撤销界面使用；终端只显示提交后的全文，工具进度仍可实时显示。断线重放应按事件序号重新应用这些转移，不把被丢弃的草稿留在界面。评分器 v6 检查暂定文本都有关闭事件且提交文本等于最终答案；旧 Trace 没有该协议字段时仍可独立重评。
+
+### 6.2 当前实现的分层上下文
+
+当前上下文先尝试完整视图；字符预算不足时，仅对较早的 SQL 工具结果生成紧凑模型视图，保留查询 ID、数据版本、结果哈希、SQL、列与前三行，最近两个工具结果保持完整。若仍超额，则按完整工具调用批次边界摘要更旧的对话，并保留旧查询 ID 指针。`RunState.history` 与事件日志中的原始结果不删改；`context_layered` 和 `context_compacted` 分别记录两层动作。若最近必须保留的消息自身超额，终止为预算失败，不向模型发送超限上下文。预算目前按 JSON 字符数近似，不能当作供应商 tokenizer 的精确窗口；摘要模型的用量尚未计入主循环 token 上限。
+
 ## 7. 工具与 SQL 安全边界
 
 本地工具：`catalog_list_tables`、`catalog_get_metric`、`data_preview`、`sql_query`（具体名称可按实现固定）。每个工具登记输入 schema、输出 schema、只读属性、最大结果大小、超时、允许并发性。Tool Dispatcher 在执行前按顺序检查：调用完整性 → JSON/schema → 工具白名单 → 运行预算 → SQL 策略 → 查询执行。工具错误以结构化代码返回模型并写入 Trace。

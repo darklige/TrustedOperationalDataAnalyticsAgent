@@ -6,17 +6,37 @@ import asyncio
 from .config import make_runner, project_root
 
 
-async def _ask(question: str) -> None:
-    runner = make_runner()
+class TerminalEventRenderer:
+    """Only show an answer after the agent has accepted that attempt."""
 
-    async def show(event: dict) -> None:
+    def __init__(self) -> None:
+        self._provisional: dict[str, list[str]] = {}
+
+    async def __call__(self, event: dict) -> None:
         kind, data = event["kind"], event["data"]
         if kind == "text_delta":
-            print(data["text"], end="", flush=True)
+            if data.get("provisional"):
+                attempt_id = str(data.get("attempt_id", ""))
+                self._provisional.setdefault(attempt_id, []).append(data["text"])
+            else:
+                # Existing callbacks without the new protocol still stream directly.
+                print(data["text"], end="", flush=True)
+        elif kind == "text_committed":
+            attempt_id = str(data.get("attempt_id", ""))
+            buffered = "".join(self._provisional.pop(attempt_id, []))
+            print(data.get("text", buffered), end="", flush=True)
+        elif kind == "text_discarded":
+            self._provisional.pop(str(data.get("attempt_id", "")), None)
         elif kind in {"tool_started", "tool_finished", "tool_failed", "run_failed"}:
-            print(f"\n[{kind}] {data}", flush=True)
+            if kind == "run_failed":
+                self._provisional.clear()
+            progress = {key: value for key, value in data.items() if key != "result"}
+            print(f"\n[{kind}] {progress}", flush=True)
 
-    state = await runner.run(question, callback=show)
+
+async def _ask(question: str) -> None:
+    runner = make_runner()
+    state = await runner.run(question, callback=TerminalEventRenderer())
     print(f"\nrun_id={state.run_id} status={state.status}")
 
 
@@ -49,15 +69,9 @@ def main() -> None:
                                                        {"trips", "zones"}), root),
                              EventStore(root / "runtime/agent.sqlite3"))
 
-        async def show(event: dict) -> None:
-            if event["kind"] == "text_delta":
-                print(event["data"]["text"], end="", flush=True)
-            elif event["kind"] in {"tool_started", "tool_finished", "run_failed"}:
-                data = {k: v for k, v in event["data"].items() if k != "result"}
-                print(f"\n[{event['kind']}] {data}", flush=True)
-
         async def run_demo() -> None:
-            result = await runner.run("2025 年 1 月和 2 月各有多少条合格行程？", callback=show)
+            result = await runner.run("2025 年 1 月和 2 月各有多少条合格行程？",
+                                      callback=TerminalEventRenderer())
             print(f"\nrun_id={result.run_id} status={result.status}")
 
         asyncio.run(run_demo())

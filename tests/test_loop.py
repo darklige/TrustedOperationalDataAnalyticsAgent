@@ -74,6 +74,12 @@ async def test_loop_tools_evidence_and_replay(tmp_path):
     assert rebuilt.answer == state.answer
     assert rebuilt.turn == state.turn
     assert rebuilt.history == state.history
+    final_events = [event for event in events if event["kind"] in {
+        "text_delta", "text_committed", "run_completed"}]
+    assert final_events[-3]["data"]["provisional"] is True
+    assert final_events[-3]["data"]["attempt_id"] == final_events[-2]["data"]["attempt_id"]
+    assert final_events[-2]["data"]["text"] == state.answer
+    assert final_events[-1]["data"]["attempt_id"] == final_events[-2]["data"]["attempt_id"]
     next_state = await runner.run("再确认一次", run_id=state.run_id)
     assert next_state.status == "completed"
     replayed = store.replay(state.run_id)
@@ -179,6 +185,7 @@ def test_abstention_cannot_launder_numeric_claim_without_query(answer):
 @pytest.mark.parametrize("answer", [
     "无法核实该结果。",
     "无法核实 2025-03 的数据，因为当前数据集未覆盖该月份。",
+    "当前数据仅涵盖 2025-01-01 至 2025-02-28，不包含 2025 年 3 月，因此无法通过查询验证该月行程量。",
     "无法核实 2025 年 3 月的数据；请补充该月份的来源。",
     "当前数据仅覆盖 2025 年 1 月和 2 月，因此无法核实 2024 年 12 月 31 日的行程数。",
     "数据仅覆盖 2025-01-01 至 2025-02-28；source_month 仅有 '2025-01' 和 '2025-02' 两个值，因此无法核实 2024-12-31 的行程数。",
@@ -192,6 +199,8 @@ def test_answer_type_records_query_or_refusal():
     assert AgentRunner._answer_type("3 条 [query_id:q1]", ["q1"]) == "query_evidence"
     assert AgentRunner._answer_type("无法核实 2024 年 12 月的行程数", []) == "refusal"
     assert AgentRunner._answer_type("无法核实，但有 3 条行程", []) is None
+    assert AgentRunner._answer_type("无法核实。[query_id:describe_data]", []) is None
+    assert AgentRunner._answer_type("3 条 [query_id:q1] [query_id:made_up]", ["q1"]) is None
 
 
 class SafeRefusalProvider:
@@ -228,6 +237,24 @@ async def test_safe_refusal_completes_without_repeating_model(tmp_path, answer):
     assert events[-1]["data"]["answer_type"] == "refusal"
 
 
+@pytest.mark.asyncio
+async def test_local_file_request_is_refused_before_provider_or_tool(tmp_path):
+    query = FakeQuery()
+    store = EventStore(tmp_path / "state.db")
+    provider = SafeRefusalProvider("should never run")
+    runner = AgentRunner(provider, ToolRegistry(query, tmp_path), store)
+    state = await runner.run("请读取本机 /etc/passwd 文件，寻找司机名单")
+    events = store.events(state.run_id)
+    assert state.status == "completed"
+    assert "不能读取" in state.answer
+    assert provider.calls == 0
+    assert query.calls == []
+    assert [event["kind"] for event in events] == [
+        "run_started", "policy_refusal", "text_committed", "run_completed"]
+    assert events[-1]["data"]["answer_type"] == "refusal"
+    assert AgentRunner._forbidden_local_file_request("请查看 https://example.com/report") is False
+
+
 class UnsupportedThenRefusalProvider:
     def __init__(self):
         self.turns = 0
@@ -255,7 +282,15 @@ async def test_numeric_abstention_is_rejected_then_pure_refusal_completes(tmp_pa
     assert state.turn == 2
     assert state.answer == "无法核实该结果，请补充数据来源。"
     assert query.calls == []
-    assert [event["kind"] for event in store.events(state.run_id)].count("answer_rejected") == 1
+    events = store.events(state.run_id)
+    assert [event["kind"] for event in events].count("answer_rejected") == 1
+    rejected = next(event for event in events if event["kind"] == "answer_rejected")
+    discarded = next(event for event in events if event["kind"] == "text_discarded")
+    assert discarded["data"]["attempt_id"] == rejected["data"]["attempt_id"]
+    assert discarded["data"]["reason"] == "answer_rejected"
+    committed = next(event for event in events if event["kind"] == "text_committed")
+    assert committed["data"]["text"] == state.answer
+    assert committed["data"]["attempt_id"] != discarded["data"]["attempt_id"]
 
 
 class TokenHeavyProvider:
@@ -275,6 +310,46 @@ async def test_token_budget_is_terminal(tmp_path):
     state = await runner.run("answer")
     assert state.status == "budget_exceeded"
     assert store.events(state.run_id)[-1]["data"]["error_type"] == "BudgetExceeded"
+    assert any(event["kind"] == "text_discarded" and
+               event["data"]["reason"] == "token_budget_exceeded"
+               for event in store.events(state.run_id))
+
+
+@pytest.mark.asyncio
+async def test_uncompressible_context_stops_before_model_request(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    provider = SafeRefusalProvider("无法核实该结果。")
+    runner = AgentRunner(provider, ToolRegistry(FakeQuery(), tmp_path), store,
+                         context_char_budget=50)
+    state = await runner.run("a question longer than the tiny context budget")
+    assert state.status == "budget_exceeded"
+    assert provider.calls == 0
+    events = store.events(state.run_id)
+    assert next(event for event in events if event["kind"] == "context_built")["data"][
+        "budget_exceeded"] is True
+    assert not any(event["kind"] == "model_started" for event in events)
+
+
+class InterruptedTextProvider:
+    async def summarize(self, items):
+        return "summary"
+
+    async def stream(self, messages, tools, instructions):
+        yield ProviderEvent("text_delta", {"text": "There were 999 trips."})
+        raise ProviderStreamError("connection lost", usage={"total_tokens": 7})
+
+
+@pytest.mark.asyncio
+async def test_partial_text_is_discarded_before_stream_failure(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    runner = AgentRunner(InterruptedTextProvider(), ToolRegistry(FakeQuery(), tmp_path), store)
+    state = await runner.run("count")
+    events = store.events(state.run_id)
+    assert state.status == "failed"
+    assert [event["kind"] for event in events[-3:]] == [
+        "text_discarded", "model_failed", "run_failed"]
+    assert events[-3]["data"]["attempt_id"] == events[-2]["data"]["attempt_id"]
+    assert not any(event["kind"] == "text_committed" for event in events)
 
 
 class TruncatedProvider:
