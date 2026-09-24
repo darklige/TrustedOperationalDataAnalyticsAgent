@@ -130,6 +130,31 @@ def _numeric_projection_matches(actual: list[list[Any]],
     return all(expected_numbers) and _rows_equal(actual_numbers, expected_numbers)
 
 
+def _single_answer_projection_matches(actual: list[list[Any]],
+                                      expected: list[list[Any]]) -> bool:
+    """Flag a possible top answer with an omitted count for human review.
+
+    This narrow structural check never awards a pass: without an explicit
+    answer-column contract we cannot tell whether the omitted count was asked
+    for, or whether an extra result row changes the final answer. Requiring an
+    exact label and displayed measure keeps unrelated partial matches false.
+    """
+    if len(expected) != 1 or len(expected[0]) != 3:
+        return False
+    label, count, measure = expected[0]
+    if (not isinstance(label, str) or not isinstance(count, int)
+            or isinstance(count, bool) or count < 0
+            or not isinstance(measure, (int, float)) or isinstance(measure, bool)):
+        return False
+    return any(
+        len(row) == 2 and (
+            (_cell_equal(row[0], label) and _cell_equal(row[1], measure))
+            or (_cell_equal(row[1], label) and _cell_equal(row[0], measure))
+        )
+        for row in actual
+    )
+
+
 def score_prediction(case: EvalCase, sql: str | None, query_service: Any) -> tuple[bool | None, list[str]]:
     """Run a candidate through the production SQL boundary and compare data, not SQL text."""
     if not case.is_numeric:
@@ -151,6 +176,11 @@ def score_prediction(case: EvalCase, sql: str | None, query_service: Any) -> tup
         if (isinstance(rows, list) and expected and len(rows) > len(expected)
                 and _rows_equal(rows[:len(expected)], expected)):
             return None, ["gold rows are a prefix of a larger result; review the final answer"]
+        if (isinstance(rows, list) and len(expected) == 1 and len(rows) > 1
+                and any(_rows_equal([row], expected) for row in rows)):
+            return None, ["gold row appears among extra result rows; review ranking and final answer"]
+        if isinstance(rows, list) and _single_answer_projection_matches(rows, expected):
+            return None, ["gold label and measure match, but an auxiliary count is omitted; review count and row ranking"]
         if isinstance(rows, list) and _numeric_projection_matches(rows, expected):
             return None, ["numeric measures match but group labels differ; review the labels"]
         return False, ["candidate result differs from frozen gold result"]

@@ -169,6 +169,8 @@ def test_large_tool_result_keeps_evidence_id_in_model_view():
     "无法核实，但共有三百万条行程。",
     "无法核实，但增长百分之三十。",
     "请澄清口径；该月为 86.5%。",
+    "无法核实 2024 年 12 月的数据，但共有 300 万单。",
+    "无法执行 DROP TABLE。\n1. 已删除 3 条记录。",
 ])
 def test_abstention_cannot_launder_numeric_claim_without_query(answer):
     assert not AgentRunner._answer_has_evidence(answer, [])
@@ -178,9 +180,52 @@ def test_abstention_cannot_launder_numeric_claim_without_query(answer):
     "无法核实该结果。",
     "无法核实 2025-03 的数据，因为当前数据集未覆盖该月份。",
     "无法核实 2025 年 3 月的数据；请补充该月份的来源。",
+    "当前数据仅覆盖 2025 年 1 月和 2 月，因此无法核实 2024 年 12 月 31 日的行程数。",
+    "数据仅覆盖 2025-01-01 至 2025-02-28；source_month 仅有 '2025-01' 和 '2025-02' 两个值，因此无法核实 2024-12-31 的行程数。",
+    "无法执行 DROP TABLE；建议：\n1. 只选择必要字段；\n2. 添加 source_month='2025-01' 过滤。",
 ])
 def test_pure_abstention_without_query_is_allowed(answer):
     assert AgentRunner._answer_has_evidence(answer, [])
+
+
+def test_answer_type_records_query_or_refusal():
+    assert AgentRunner._answer_type("3 条 [query_id:q1]", ["q1"]) == "query_evidence"
+    assert AgentRunner._answer_type("无法核实 2024 年 12 月的行程数", []) == "refusal"
+    assert AgentRunner._answer_type("无法核实，但有 3 条行程", []) is None
+
+
+class SafeRefusalProvider:
+    def __init__(self, answer):
+        self.answer = answer
+        self.calls = 0
+
+    async def summarize(self, items):
+        return "summary"
+
+    async def stream(self, messages, tools, instructions):
+        self.calls += 1
+        yield ProviderEvent("text_delta", {"text": self.answer})
+        yield ProviderEvent("completed", {"output": [{"type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": self.answer}]}], "usage": {}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", [
+    "数据仅覆盖 2025 年 1 月和 2 月，因此无法核实 2024 年 12 月 31 日的行程数。",
+    "无法执行 DROP TABLE。建议：\n1. 查询必要字段；\n2. 使用 source_month='2025-01'。",
+])
+async def test_safe_refusal_completes_without_repeating_model(tmp_path, answer):
+    query = FakeQuery()
+    store = EventStore(tmp_path / "state.db")
+    provider = SafeRefusalProvider(answer)
+    runner = AgentRunner(provider, ToolRegistry(query, tmp_path), store)
+    state = await runner.run("Please answer safely")
+    assert state.status == "completed"
+    assert provider.calls == 1
+    assert query.calls == []
+    events = store.events(state.run_id)
+    assert events[-1]["kind"] == "run_completed"
+    assert events[-1]["data"]["answer_type"] == "refusal"
 
 
 class UnsupportedThenRefusalProvider:

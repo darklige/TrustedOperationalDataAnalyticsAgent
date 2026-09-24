@@ -238,7 +238,8 @@ class AgentRunner:
             evidence = [e["data"].get("result", {}).get("query_id") for e in
                         self.store.events(state.run_id) if e["kind"] == "tool_finished"]
             evidence = [item for item in evidence if item]
-            if not self._answer_has_evidence(answer, evidence):
+            answer_type = self._answer_type(answer, evidence)
+            if answer_type is None:
                 state.history.append({"role": "developer", "content":
                     "Your final response lacked verifiable query evidence. Run a query and cite "
                     "numerical findings as [query_id:ID], or explicitly say you cannot verify "
@@ -250,7 +251,7 @@ class AgentRunner:
             state.status = "completed"
             self.store.save(state)
             await self._emit(state, "run_completed", {"answer": answer,
-                           "evidence_ids": evidence}, callback)
+                           "evidence_ids": evidence, "answer_type": answer_type}, callback)
             return
         state.status = "budget_exceeded"
         self.store.save(state)
@@ -309,29 +310,48 @@ class AgentRunner:
 
     @staticmethod
     def _answer_has_evidence(answer: str, evidence: list[str]) -> bool:
+        return AgentRunner._answer_type(answer, evidence) is not None
+
+    @staticmethod
+    def _answer_type(answer: str, evidence: list[str]) -> str | None:
         if not answer:
-            return False
+            return None
         if evidence and any(f"[query_id:{item}]" in answer for item in evidence):
-            return True
+            return "query_evidence"
         # An abstention is only an alternative to evidence when it contains no
         # quantitative result. Otherwise "无法核实，但有 3 条" would bypass the gate.
-        if not re.search(r"无法(核实|验证|回答)|请(明确|澄清|补充)|cannot verify|cannot answer|could you clarify",
+        if not re.search(r"无法(核实|验证|回答|执行|提供)|不能执行|不允许执行|拒绝执行|"
+                         r"请(明确|澄清|补充)|cannot verify|cannot answer|cannot execute|"
+                         r"cannot run|not permitted|could you clarify",
                          answer, re.IGNORECASE):
-            return False
+            return None
         without_dates = re.sub(
             r"(?<!\d)(?:19|20)\d{2}(?:[-/]\d{1,2}(?:[-/]\d{1,2})?|\s*年(?:\s*\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?)?)(?!\d)",
             "", answer,
         )
+        # A refusal may quote coverage months or enumerate safe alternatives.
+        # Remove only those forms; an unsubstantiated result in the same text
+        # (for example "300 万单") still contains digits and is rejected.
+        without_dates = re.sub(r"(?<!\d)\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?", "",
+                               without_dates)
+        without_dates = re.sub(r"(?m)^\s*(?:[-*]\s*)?\d{1,2}[.)、]\s+", "",
+                               without_dates)
+        # The schema tool exposes the two source_month values as metadata.
+        # "两个值" describes that coverage, not a trip count. Require both
+        # month literals and the field name before allowing this phrase.
+        if ("source_month" in answer and
+                len(re.findall(r"(?<!\d)(?:19|20)\d{2}-\d{2}(?!\d)", answer)) >= 2):
+            without_dates = without_dates.replace("两个值", "")
         if re.search(r"\d", without_dates):
-            return False
-        if re.search(r"百分之[零〇一二两三四五六七八九十百千万亿]+", answer):
-            return False
+            return None
+        if re.search(r"百分之[零〇一二两三四五六七八九十百千万亿]+", without_dates):
+            return None
         # Cover common Chinese-number results without rejecting ordinary words
         # such as “一个” in a request for clarification.
-        return not bool(re.search(
+        return "refusal" if not re.search(
             r"[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二三四五六七八九]+)?"
-            r"\s*(?:%|％|个|条|次|辆|倍|元|美元|百分点|万|亿)", answer,
-        ))
+            r"\s*(?:%|％|个|条|次|辆|倍|元|美元|百分点|万|亿)", without_dates,
+        ) else None
 
     async def _emit(self, state: RunState, kind: str, data: dict[str, Any],
                     callback: EventCallback | None) -> None:

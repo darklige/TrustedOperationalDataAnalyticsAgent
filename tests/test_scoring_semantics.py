@@ -54,6 +54,58 @@ def test_matching_week_measures_with_new_labels_require_review() -> None:
     assert "group labels" in notes[0]
 
 
+def test_single_top_answer_with_unasked_count_omitted_requires_review() -> None:
+    case = EvalCase("top", "distribution", "Which borough has the highest p90?",
+                    "SELECT ...", [["North", 123456, 53.68]], None)
+
+    class Query:
+        def __init__(self, rows: list[list[object]]) -> None:
+            self.rows = rows
+
+        def query(self, sql: str, row_limit: int = 1000) -> dict:
+            return {"rows": self.rows, "truncated": False}
+
+    correct, notes = score_prediction(case, "SELECT ...", Query([["North", 53.68]]))
+    assert correct is None
+    assert "auxiliary count" in notes[0]
+    events = [
+        {"seq": 1, "run_id": "top-run", "kind": "run_started", "data": {}},
+        {"seq": 2, "run_id": "top-run", "kind": "tool_call_ready", "data": {"call_id": "c1"}},
+        {"seq": 3, "run_id": "top-run", "kind": "tool_started", "data": {"call_id": "c1"}},
+        {"seq": 4, "run_id": "top-run", "kind": "tool_finished", "data": {
+            "call_id": "c1", "name": "run_sql", "result": {"query_id": "q1", "sql": "SELECT ..."}}},
+        {"seq": 5, "run_id": "top-run", "kind": "run_completed", "data": {
+            "answer": "North, p90 53.68 [query_id:q1]"}},
+    ]
+    scored = score_trace(case, events, Query([["North", 53.68]]))
+    assert scored.sql_correct is None
+    assert scored.status == "needs_review"
+    assert scored.trace_ok is True
+    # Extra rows or changed ordering require checking the final answer, too.
+    correct, notes = score_prediction(case, "SELECT ...",
+                                      Query([["South", 51.2], ["North", 53.68]]))
+    assert correct is None
+    assert "ranking" in notes[0]
+
+    for wrong in ([["North", 53.5]], [["South", 53.68]], [["North", 53.5],
+                                                              ["South", 53.68]]):
+        assert score_prediction(case, "SELECT ...", Query(wrong))[0] is False
+
+
+def test_gold_top_row_among_unordered_extra_rows_requires_review() -> None:
+    case = EvalCase("top", "distribution", "Which borough has the highest p90?",
+                    "SELECT ...", [["North", 123456, 53.68]], None)
+
+    class Query:
+        def query(self, sql: str, row_limit: int = 1000) -> dict:
+            return {"rows": [["South", 78901, 51.2], ["North", 123456, 53.68]],
+                    "truncated": False}
+
+    correct, notes = score_prediction(case, "SELECT ...", Query())
+    assert correct is None
+    assert "extra result rows" in notes[0]
+
+
 def test_derived_answer_with_cited_raw_ratio_is_reviewed() -> None:
     case = EvalCase("r", "metric_semantics", "percent and sample size", "SELECT ...",
                     [[22.89, 2308273]], None)

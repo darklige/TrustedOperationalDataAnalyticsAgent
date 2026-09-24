@@ -40,4 +40,8 @@
 
 Agent 的 7 次 fail 包括 E020 三次、E056 一次 SQL 结果与金标不符，以及 E072 两次、E080 一次未形成合格完成 Trace。自动可判子集上的 SQL 匹配分别是 Agent 38/42、基线 33/51；**分母不同，不能把 38/42 与 33/51 当作完整任务准确率对比**。Agent 9 次数值待审可能需要核算多次查询、原始比例或标签；42 次基线任务待审也不代表其输出了完整答案。行为题的结论和所有最终文字均未由人审核，因此任务完成率为空，0 人工 pass 并不等于 0 成功。基线没有查询结果反馈，报告不能检验其最终数值文字是否正确。
 
+### 事后误差审计（不改写冻结成绩）
+
+冻结批次结束后回看失败 Trace，发现 E072 的数据范围拒答和 E080 的写操作拒答曾被旧版无证据数字正则反复拒绝；这反映门禁误拒，不代表模型执行了不安全操作。E056 的一次回答指出 Queens 的 90 分位时长为 53.68 分钟，符合题面的主要问题，但引用查询还包含额外行、没有金标中的辅助样本数；旧评分器直接判 `false`，保守处理应转人工复核。E020 金标隐含 `fare_amount >= 0`，题面未明说此过滤，属于需澄清的口径歧义。以上发现**没有回填或改写原报告分数**。后续修复只在开发集与合成回归题上验证；既然已查看留出集错误，下一轮性能结论须使用新冻结留出集。
+
 完整报告和证据在被 Git 忽略的本机目录：`runtime/final_agent_heldout20x3.json`、`runtime/final_agent_heldout20x3.sqlite3`、`runtime/final_agent_heldout20x3_review_queue.md`，以及 `runtime/final_baseline_heldout20x3.json`、`runtime/final_baseline_heldout20x3_predictions.jsonl`、`runtime/final_baseline_heldout20x3_review_queue.md`。开发集对应的 Agent/基线待审队列分别是 `runtime/final_agent_dev72x3_review_queue.md` 和 `runtime/final_baseline_dev72x3_review_queue.md`。四组原始报告均有 `*_rescored.json`；从持久化 Trace 或原预测无模型重评后，**552/552** 条核心分数及四组汇总分别与原报告一致。公开仓库另提供 [`docs/eval_artifacts/`](eval_artifacts/) 中的四份逐 trial 评分快照及待审队列；它们只隐去本机 Trace 的绝对路径，不包含原始 SQLite Trace，因此公开副本本身不能运行 `rescore`。审核人应先完成队列中的答案、SQL、结果、限定语及引用核对，再用 `eval review` 产生带审核人和理由的正式完成率。没有核对供应商账单，本报告只给实测 token，不推算货币成本。
