@@ -170,6 +170,9 @@ def score_prediction(case: EvalCase, sql: str | None, query_service: Any) -> tup
     rows = result.get("rows")
     if not isinstance(rows, list) or not _rows_equal(rows, case.expected_rows or []):
         expected = case.expected_rows or []
+        if (isinstance(rows, list) and any(_rows_equal(rows, alternative)
+                                           for alternative in case.review_expected_rows)):
+            return None, ["candidate matches a documented alternative metric interpretation; review final answer"]
         if (case.category == "denominator" and isinstance(rows, list)
                 and _denominator_components_match(rows, expected)):
             return None, ["query returns numerator and denominator; review the answer's percentage"]

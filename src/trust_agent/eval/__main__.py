@@ -16,7 +16,7 @@ from trust_agent.store import EventStore
 from .review import SCORER_VERSION, apply_reviews, rescore_report
 from .runner import TrialJournal, run_agent_trials, run_baseline_trials
 from .scoring import TrialScore, score_prediction, score_trace, summarize_trials
-from .tasks import load_cases
+from .tasks import apply_ambiguity_sidecar, load_cases
 
 
 def _save_json(path: str | None, payload: Any) -> None:
@@ -44,6 +44,17 @@ def _source_sha256(source_root: Path | None = None) -> str:
     return digest.hexdigest()
 
 
+def _ambiguities_sha256(args: argparse.Namespace) -> str | None:
+    path = getattr(args, "ambiguities", None)
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest() if path else None
+
+
+def _load_scoring_cases(args: argparse.Namespace, service: QueryService) -> list[Any]:
+    cases = load_cases(args.cases)
+    ambiguities = getattr(args, "ambiguities", None)
+    return apply_ambiguity_sidecar(cases, ambiguities, service) if ambiguities else cases
+
+
 def _trial_journal(args: argparse.Namespace, cases: list[Any], provider: Any,
                    *, mode: str) -> TrialJournal | None:
     if args.resume and not args.checkpoint:
@@ -68,6 +79,7 @@ def _trial_journal(args: argparse.Namespace, cases: list[Any], provider: Any,
         "provider_settings_sha256": hashlib.sha256(json.dumps(
             provider_settings, sort_keys=True).encode()).hexdigest(),
         "suite_sha256": hashlib.sha256(Path(args.cases).read_bytes()).hexdigest(),
+        "ambiguities_sha256": _ambiguities_sha256(args),
         "source_sha256": _source_sha256(),
         "trial_keys": [{"case_id": case.id, "trial": trial}
                        for case in cases for trial in range(1, args.repeats + 1)],
@@ -80,6 +92,10 @@ def _trial_journal(args: argparse.Namespace, cases: list[Any], provider: Any,
             "max_tool_calls": args.max_tool_calls,
             "max_total_tokens": args.max_total_tokens,
             "max_wall_seconds": args.max_wall_seconds,
+            "model_context_tokens": args.model_context_tokens,
+            "output_reserve_tokens": args.output_reserve_tokens,
+            "stream_idle_seconds": args.stream_idle_seconds,
+            "max_stream_retries": args.max_stream_retries,
         }
         metadata["trace_store"] = str(Path(args.state_db).resolve())
     return TrialJournal(args.checkpoint, metadata, resume=args.resume)
@@ -95,8 +111,8 @@ def _generation_settings() -> dict[str, Any]:
 
 
 def _score_predictions(args: argparse.Namespace) -> None:
-    cases = {case.id: case for case in load_cases(args.cases)}
     service = QueryService(args.db, ("trips", "zones"))
+    cases = {case.id: case for case in _load_scoring_cases(args, service)}
     scores: list[TrialScore] = []
     for number, line in enumerate(Path(args.predictions).read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
@@ -119,20 +135,21 @@ def _score_predictions(args: argparse.Namespace) -> None:
                 sql_correct=correct, errors=errors,
             )
         scores.append(score)
-    _save_json(args.out, {"trials": [score.to_dict() for score in scores],
+    _save_json(args.out, {"ambiguities_sha256": _ambiguities_sha256(args),
+                          "trials": [score.to_dict() for score in scores],
                           "summary": summarize_trials(scores)})
 
 
 def _rescore(args: argparse.Namespace) -> None:
     report = json.loads(Path(args.report).read_text(encoding="utf-8"))
-    cases = {case.id: case for case in load_cases(args.cases)}
+    service = QueryService(args.db, ("trips", "zones"))
+    cases = {case.id: case for case in _load_scoring_cases(args, service)}
     if report.get("suite_sha256") != hashlib.sha256(Path(args.cases).read_bytes()).hexdigest():
         raise ValueError("report suite hash differs from current cases")
     if args.predictions:
         if args.state_db:
             raise ValueError("provide --predictions or --state-db, not both")
         predictions: dict[tuple[str, int], dict[str, Any]] = {}
-        service = QueryService(args.db, ("trips", "zones"))
         for line_number, line in enumerate(Path(args.predictions).read_text(
                 encoding="utf-8").splitlines(), 1):
             if not line.strip():
@@ -175,6 +192,7 @@ def _rescore(args: argparse.Namespace) -> None:
             raise FileNotFoundError(args.state_db)
         rescored = rescore_report(report, cases, EventStore(args.state_db),
                                   QueryService(args.db, ("trips", "zones")))
+    rescored["ambiguities_sha256"] = _ambiguities_sha256(args)
     _save_json(args.out, rescored)
 
 
@@ -188,10 +206,10 @@ def _review(args: argparse.Namespace) -> None:
 async def _run_baseline(args: argparse.Namespace) -> None:
     from trust_agent.config import make_provider
 
-    cases = load_cases(args.cases)
+    service = QueryService(args.db, ("trips", "zones"))
+    cases = _load_scoring_cases(args, service)
     if args.limit:
         cases = cases[:args.limit]
-    service = QueryService(args.db, ("trips", "zones"))
     provider = make_provider(args.model)
     journal = _trial_journal(args, cases, provider, mode="baseline")
     scores, predictions = await run_baseline_trials(cases, provider, service,
@@ -213,6 +231,7 @@ async def _run_baseline(args: argparse.Namespace) -> None:
                           "generation_settings": _generation_settings(),
                           "suite": Path(args.cases).name,
                           "suite_sha256": hashlib.sha256(Path(args.cases).read_bytes()).hexdigest(),
+                          "ambiguities_sha256": _ambiguities_sha256(args),
                           "source_sha256": _source_sha256(),
                           "trials": [score.to_dict() for score in scores],
                           "summary": summarize_trials(scores)})
@@ -224,10 +243,10 @@ async def _run_agent(args: argparse.Namespace) -> None:
     from trust_agent.store import EventStore
     from trust_agent.tools import ToolRegistry
 
-    cases = load_cases(args.cases)
+    service = QueryService(args.db, ("trips", "zones"))
+    cases = _load_scoring_cases(args, service)
     if args.limit:
         cases = cases[:args.limit]
-    service = QueryService(args.db, ("trips", "zones"))
     project_root = Path(__file__).resolve().parents[3]
     provider = make_provider(args.model)
     runner = AgentRunner(
@@ -238,6 +257,10 @@ async def _run_agent(args: argparse.Namespace) -> None:
         max_tool_calls=args.max_tool_calls,
         max_total_tokens=args.max_total_tokens,
         max_wall_seconds=args.max_wall_seconds,
+        model_context_tokens=args.model_context_tokens,
+        output_reserve_tokens=args.output_reserve_tokens,
+        stream_idle_seconds=args.stream_idle_seconds,
+        max_stream_retries=args.max_stream_retries,
     )
     journal = _trial_journal(args, cases, provider, mode="agent")
     completed = journal.scores() if journal else None
@@ -259,12 +282,17 @@ async def _run_agent(args: argparse.Namespace) -> None:
                           "generation_settings": _generation_settings(),
                           "suite": Path(args.cases).name,
                           "suite_sha256": hashlib.sha256(Path(args.cases).read_bytes()).hexdigest(),
+                          "ambiguities_sha256": _ambiguities_sha256(args),
                           "source_sha256": _source_sha256(),
                           "suite_size": len(cases),
                           "budgets": {"max_turns": args.max_turns,
                                       "max_tool_calls": args.max_tool_calls,
                                       "max_total_tokens": args.max_total_tokens,
-                                      "max_wall_seconds": args.max_wall_seconds},
+                                      "max_wall_seconds": args.max_wall_seconds,
+                                      "model_context_tokens": args.model_context_tokens,
+                                      "output_reserve_tokens": runner.context.output_reserve_tokens,
+                                      "stream_idle_seconds": args.stream_idle_seconds,
+                                      "max_stream_retries": args.max_stream_retries},
                           "trace_store": str(Path(args.state_db).resolve()),
                           "trials": [score.to_dict() for score in scores],
                           "summary": summarize_trials(scores)})
@@ -278,6 +306,7 @@ def main() -> None:
         if name != "review":
             command.add_argument("--cases", default="evals/gold_cases.jsonl")
             command.add_argument("--db", default="data/nyc_taxi.duckdb")
+            command.add_argument("--ambiguities", help="explicit review-only ambiguity sidecar")
         command.add_argument("--out", help="save JSON report")
     score = sub.choices["score"]
     score.add_argument("--predictions", required=True, help="JSONL with case_id, sql or events")
@@ -298,6 +327,15 @@ def main() -> None:
     agent.add_argument("--max-tool-calls", type=int, default=16)
     agent.add_argument("--max-total-tokens", type=int, default=100_000)
     agent.add_argument("--max-wall-seconds", type=float, default=300)
+    agent.add_argument("--model-context-tokens", type=int,
+                       default=int(os.getenv("TRUST_AGENT_MODEL_CONTEXT_TOKENS", "32768")))
+    agent.add_argument("--output-reserve-tokens", type=int,
+                       default=int(os.getenv("TRUST_AGENT_OUTPUT_RESERVE_TOKENS"))
+                       if os.getenv("TRUST_AGENT_OUTPUT_RESERVE_TOKENS") else None)
+    agent.add_argument("--stream-idle-seconds", type=float,
+                       default=float(os.getenv("TRUST_AGENT_STREAM_IDLE_SECONDS", "45")))
+    agent.add_argument("--max-stream-retries", type=int,
+                       default=int(os.getenv("TRUST_AGENT_MAX_STREAM_RETRIES", "1")))
     agent.add_argument("--checkpoint", help="durable per-trial JSONL journal")
     agent.add_argument("--resume", action="store_true", help="resume matching checkpoint")
     rescore = sub.choices["rescore"]

@@ -18,6 +18,7 @@ from trust_agent.store import EventStore
 def analyze(report: dict, store: EventStore) -> dict:
     trials = []
     first_event_latencies = []
+    first_text_latencies = []
     for score in report["trials"]:
         events = store.events(score["run_id"])
         completions = [event for event in events if event["kind"] == "run_completed"]
@@ -31,6 +32,8 @@ def analyze(report: dict, store: EventStore) -> dict:
         for event in events:
             if event["kind"] == "model_completed" and event["data"].get("first_event_ms") is not None:
                 first_event_latencies.append(event["data"]["first_event_ms"])
+            if event["kind"] == "model_completed" and event["data"].get("first_text_ms") is not None:
+                first_text_latencies.append(event["data"]["first_text_ms"])
         trials.append({
             "case_id": score["case_id"],
             "run_completed": len(completions) == 1 and bool(events)
@@ -78,6 +81,8 @@ def analyze(report: dict, store: EventStore) -> dict:
             "mean_latency_ms": mean(latencies) if latencies else None,
             "mean_model_first_event_ms": (mean(first_event_latencies)
                                           if first_event_latencies else None),
+            "mean_model_first_text_ms": (mean(first_text_latencies)
+                                         if first_text_latencies else None),
             "task_completion_rate": None,
             "task_completion_note": "Final prose and behavioral rubrics require human review.",
         },

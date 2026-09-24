@@ -1,11 +1,14 @@
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from openai import APIConnectionError
 from openai.types.responses import (
     ResponseFunctionCallArgumentsDoneEvent,
     ResponseOutputItemDoneEvent,
 )
 
+from trust_agent.domain import ProviderStreamError
 from trust_agent.provider import OpenAIResponsesProvider
 
 
@@ -71,3 +74,76 @@ async def test_completed_response_recovers_call_if_item_done_event_was_missing()
     events = [event async for event in provider.stream([], [], "test")]
     assert [event.kind for event in events][-2:] == ["tool_ready", "completed"]
     assert events[-2].data["call_id"] == "c1"
+
+
+@pytest.mark.asyncio
+async def test_responses_transport_error_is_retryable():
+    class FailingResponses:
+        async def create(self, **kwargs):
+            async def events():
+                yield SimpleNamespace(type="response.output_text.delta", delta="draft")
+                raise APIConnectionError(request=httpx.Request("POST", "https://example.com"))
+            return events()
+
+    provider = OpenAIResponsesProvider("test-model", api_key="test-key")
+    provider.client = SimpleNamespace(responses=FailingResponses())
+    events = []
+    with pytest.raises(ProviderStreamError) as caught:
+        async for event in provider.stream([], [], "test"):
+            events.append(event)
+    assert [event.kind for event in events] == ["text_delta"]
+    assert caught.value.retryable is True
+    assert caught.value.reason == "transport"
+
+
+@pytest.mark.asyncio
+async def test_responses_incomplete_reports_usage_and_retries_only_before_tool_ready():
+    class IncompleteResponses:
+        async def create(self, **kwargs):
+            async def events():
+                response = SimpleNamespace(id="resp-incomplete", model="test-model",
+                                           usage=Dumpable({"input_tokens": 5,
+                                                           "output_tokens": 3,
+                                                           "total_tokens": 8}))
+                yield SimpleNamespace(type="response.incomplete", response=response)
+            return events()
+
+    provider = OpenAIResponsesProvider("test-model", api_key="test-key")
+    provider.client = SimpleNamespace(responses=IncompleteResponses())
+    with pytest.raises(ProviderStreamError) as caught:
+        async for _ in provider.stream([], [], "test"):
+            pass
+    assert caught.value.retryable is True
+    assert caught.value.reason == "truncated"
+    assert caught.value.usage["total_tokens"] == 8
+
+
+@pytest.mark.asyncio
+async def test_responses_summary_returns_usage():
+    class SummaryResponses:
+        async def create(self, **kwargs):
+            return SimpleNamespace(output_text="brief", status="completed", usage=Dumpable({
+                "input_tokens": 4, "output_tokens": 2, "total_tokens": 6}))
+
+    provider = OpenAIResponsesProvider("test-model", api_key="test-key")
+    provider.client = SimpleNamespace(responses=SummaryResponses())
+    result = await provider.summarize([{"role": "user", "content": "test"}])
+    assert result.text == "brief"
+    assert result.usage["total_tokens"] == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "usage"), [
+    ("incomplete", {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6}),
+    ("completed", None),
+])
+async def test_responses_summary_rejects_truncation_or_missing_usage(status, usage):
+    class SummaryResponses:
+        async def create(self, **kwargs):
+            return SimpleNamespace(output_text="partial", status=status,
+                                   usage=Dumpable(usage) if usage else None)
+
+    provider = OpenAIResponsesProvider("test-model", api_key="test-key")
+    provider.client = SimpleNamespace(responses=SummaryResponses())
+    with pytest.raises(ProviderStreamError):
+        await provider.summarize([{"role": "user", "content": "test"}])

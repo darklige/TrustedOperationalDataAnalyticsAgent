@@ -1,7 +1,9 @@
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from openai import APIConnectionError
 from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
 
 from trust_agent.chat_provider import ChatCompletionsProvider
@@ -127,3 +129,68 @@ async def test_chat_stream_without_usage_fails_before_tool_dispatch():
         async for event in provider.stream([], [tool], "system"):
             events.append(event)
     assert not any(event.kind == "tool_ready" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_chat_transport_failure_preserves_observed_usage():
+    class FailingChat:
+        async def create(self, **kwargs):
+            async def events():
+                yield chunk({"content": "draft"})
+                yield chunk(usage={"prompt_tokens": 8, "completion_tokens": 3,
+                                   "total_tokens": 11})
+                raise APIConnectionError(request=httpx.Request("POST", "https://example.com"))
+            return events()
+
+    provider = ChatCompletionsProvider("alias", api_key="test-key",
+                                       base_url="https://example.com/v1")
+    provider.client = SimpleNamespace(chat=SimpleNamespace(completions=FailingChat()))
+    events = []
+    with pytest.raises(ProviderStreamError) as caught:
+        async for event in provider.stream([], [], "system"):
+            events.append(event)
+    assert [event.kind for event in events] == ["text_delta"]
+    assert caught.value.retryable is True
+    assert caught.value.reason == "transport"
+    assert caught.value.usage["total_tokens"] == 11
+
+
+@pytest.mark.asyncio
+async def test_chat_summary_returns_usage():
+    class FakeSummary:
+        async def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="brief"),
+                                         finish_reason="stop")],
+                usage=SimpleNamespace(model_dump=lambda **_: {
+                    "prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11}),
+            )
+
+    provider = ChatCompletionsProvider("alias", api_key="test-key",
+                                       base_url="https://example.com/v1")
+    provider.client = SimpleNamespace(chat=SimpleNamespace(completions=FakeSummary()))
+    result = await provider.summarize([{"role": "user", "content": "test"}])
+    assert result.text == "brief"
+    assert result.usage == {"input_tokens": 9, "output_tokens": 2,
+                            "total_tokens": 11}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("finish_reason", "usage"), [
+    ("length", {"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11}),
+    ("stop", None),
+])
+async def test_chat_summary_rejects_truncation_or_missing_usage(finish_reason, usage):
+    class FakeSummary:
+        async def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="partial"),
+                                         finish_reason=finish_reason)],
+                usage=(SimpleNamespace(model_dump=lambda **_: usage) if usage else None),
+            )
+
+    provider = ChatCompletionsProvider("alias", api_key="test-key",
+                                       base_url="https://example.com/v1")
+    provider.client = SimpleNamespace(chat=SimpleNamespace(completions=FakeSummary()))
+    with pytest.raises(ProviderStreamError):
+        await provider.summarize([{"role": "user", "content": "test"}])

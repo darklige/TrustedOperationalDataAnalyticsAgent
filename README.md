@@ -37,7 +37,11 @@ Responses 适配器可在单个输出项完成时更早派发。某些兼容网�
 
 HTTP 接口：`POST /runs` 传入 `{"question":"..."}`，得到 `run_id`；随后 `GET /runs/{run_id}/events` 订阅 SSE。事件 ID 是持久化序列号；断线后可用 `?after=<最后收到的ID>` 重放遗漏事件。`GET /runs/{run_id}` 查看快照；`POST /runs/{run_id}/cancel` 取消当前进程中的任务。API 目前是本机开发接口，未加用户认证，请仅绑定 `127.0.0.1`。
 
+启动服务后打开 `http://127.0.0.1:8000/ui` 可使用浏览器界面。界面按尝试 ID 缓存暂定文本，只有收到 `text_committed` 才显示；失败、取消或 `text_discarded` 会清空草稿。页面 URL 带 `run` ID，重载时可从事件序号重放已提交答案。
+
 SSE 的 `text_delta` 是带 `attempt_id` 的暂定草稿。客户端应按 `attempt_id` 缓冲，收到 `text_committed` 才显示最终答复；`text_discarded` 应撤销相应草稿。终端 CLI 已按这一契约实现。`context_layered` 表示旧 SQL 结果在下一轮模型视图中缩成保留证据字段的摘要，原始 Trace 不变；如果仍超出预算，才触发旧轮次归纳。
+
+可通过 `TRUST_AGENT_MODEL_CONTEXT_TOKENS`、`TRUST_AGENT_OUTPUT_RESERVE_TOKENS`、`TRUST_AGENT_MAX_OUTPUT_TOKENS` 设置上下文和输出上限；`TRUST_AGENT_STREAM_IDLE_SECONDS` 与 `TRUST_AGENT_MAX_STREAM_RETRIES` 控制单次模型流的空闲超时和有限重试。`context_built.estimated_input_tokens` 是保守估算，实际用量以模型返回的 `usage` 为准。
 
 ## 实现路径
 
@@ -93,7 +97,9 @@ Flash 尚未按相同评分器重评，不能据此比较两模型整体效果�
 这些样本和版本间的评分器差异都不能推出整体性能。重评入口及审核格式见
 [docs/eval_plan.md](docs/eval_plan.md)。
 
-模型冒烟验证先使用 `gold_cases.jsonl`，调试使用 `dev_cases.jsonl`；最终报告单独使用 `heldout_cases.jsonl`。留出集不用于提示词或工具调参。
+模型冒烟验证先使用 `gold_cases.jsonl`，调试使用 `dev_cases.jsonl`。旧 `heldout_cases.jsonl` 已用于失败审计，只保留历史报告；本轮改动以新增的 `frozen_heldout_v2.jsonl` 作未见留出集，题集和数据快照可用 `.venv/bin/python scripts/verify_new_holdout.py` 核验。E020 历史金标歧义记录在 `evals/known_ambiguities_v1.json`，评分时显式传入 `--ambiguities` 后，匹配替代口径只会进入人工复核。
+
+`evals/regression_contract_cases.jsonl` 收集已知的引用、范围、安全和业务口径回归题，其中 E072/E080 是已审计的旧留出题；它只用于开发回归。运行命令把上例 `--cases` 改为该文件并保持 `--repeats 1`，结果不得称为新留出集成绩。
 
 MCP 的真实 stdio 测试和项目级 Codex 配置见 [docs/mcp_setup.md](docs/mcp_setup.md)。官方只读文档 MCP 可用于开发查询规范；项目 MCP 只暴露本地受控工具。
 

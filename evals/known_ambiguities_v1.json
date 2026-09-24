@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "dataset_snapshot": "nyc-tlc-yellow-2025-01-02-v1",
+  "historical_assets_immutable": true,
+  "ambiguities": [
+    {
+      "case_id": "E020",
+      "alternative_sql": "SELECT count(*) AS n, round(avg(t.fare_amount),2) AS mean_fare FROM trips t JOIN zones p ON t.pickup_location_id=p.location_id JOIN zones d ON t.dropoff_location_id=d.location_id WHERE t.source_month='2025-02' AND p.borough='Manhattan' AND d.borough='Staten Island'",
+      "alternative_expected_rows": [[251, 72.81]],
+      "rationale": "题面只问 Manhattan 上车、Staten Island 下车的行程数与平均车费，没有要求排除负车费。历史金标额外使用 fare_amount>=0，结果为 243 条、77.26；不加该过滤的可复核结果为 251 条、72.81。仅因这一口径差异不能自动判错或判对，需人工复核最终回答与所用口径。",
+      "decision": "needs_review"
+    }
+  ]
+}

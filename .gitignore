@@ -14,3 +14,5 @@ data/*.duckdb.part
 data/*.duckdb.wal
 runtime/
 *.log
+build/
+work/

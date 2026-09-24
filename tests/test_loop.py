@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from trust_agent.context import ContextView
 from trust_agent.domain import ProviderEvent, ProviderStreamError
 from trust_agent.loop import AgentRunner
 from trust_agent.store import EventStore
@@ -235,6 +236,8 @@ async def test_safe_refusal_completes_without_repeating_model(tmp_path, answer):
     events = store.events(state.run_id)
     assert events[-1]["kind"] == "run_completed"
     assert events[-1]["data"]["answer_type"] == "refusal"
+    assert state.stop_reason == "unverified_refusal"
+    assert store.replay(state.run_id).stop_reason == state.stop_reason
 
 
 @pytest.mark.asyncio
@@ -252,6 +255,8 @@ async def test_local_file_request_is_refused_before_provider_or_tool(tmp_path):
     assert [event["kind"] for event in events] == [
         "run_started", "policy_refusal", "text_committed", "run_completed"]
     assert events[-1]["data"]["answer_type"] == "refusal"
+    assert state.stop_reason == "safety_refusal"
+    assert store.replay(state.run_id).stop_reason == state.stop_reason
     assert AgentRunner._forbidden_local_file_request("请查看 https://example.com/report") is False
 
 
@@ -330,6 +335,70 @@ async def test_uncompressible_context_stops_before_model_request(tmp_path):
     assert not any(event["kind"] == "model_started" for event in events)
 
 
+@pytest.mark.asyncio
+async def test_summary_tokens_count_against_run_budget(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    provider = SafeRefusalProvider("无法核实该结果。")
+    runner = AgentRunner(provider, ToolRegistry(FakeQuery(), tmp_path), store,
+                         max_total_tokens=10)
+
+    async def metered_context(*args, **kwargs):
+        await kwargs["on_summary_usage"]({"input_tokens": 8, "output_tokens": 3,
+                                           "total_tokens": 11})
+        return ContextView([{"role": "user", "content": "question"}], False, 0, 50,
+                           estimated_input_tokens=100, input_token_budget=1000,
+                           summary_usage={"input_tokens": 8, "output_tokens": 3,
+                                          "total_tokens": 11})
+
+    runner.context.build = metered_context
+    state = await runner.run("question")
+    assert state.status == "budget_exceeded"
+    assert provider.calls == 0
+    events = store.events(state.run_id)
+    assert any(event["kind"] == "context_summarized" and
+               event["data"]["usage"]["total_tokens"] == 11 for event in events)
+    assert not any(event["kind"] == "model_started" for event in events)
+
+
+def test_scope_refusal_allows_trusted_version_but_not_uncited_counts():
+    version = "nyc-tlc-yellow-2025-01-02-v1"
+    answer = ("无法验证 2025 年 4 月的总收费。仅覆盖 2025-01-01 至 2025-02-28 "
+              f"[dataset_version: {version}]，无法查询该月份。")
+    assert AgentRunner._answer_type(answer, [], version) == "refusal"
+    assert AgentRunner._answer_type(answer + "但有 300 万单。", [], version) is None
+
+
+def test_cited_scope_refusal_is_still_a_refusal_after_citation_removal():
+    answer = "无法验证 2025 年 4 月的数据；仅覆盖 2025-01 和 2025-02。[query_id:q1]"
+    assert AgentRunner._answer_type(answer, ["q1"]) == "query_evidence"
+    prose = answer.replace("[query_id:q1]", "")
+    assert AgentRunner._answer_type(prose, []) == "refusal"
+    assert AgentRunner._answer_type(prose + "但有 300 万单", []) is None
+
+
+@pytest.mark.asyncio
+async def test_metric_clarification_completes_without_query_or_citation(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    provider = SafeRefusalProvider(
+        "营收可能按 total_amount 或 fare_amount 计算。请问您希望使用哪一种口径？")
+    runner = AgentRunner(provider, ToolRegistry(FakeQuery(), tmp_path), store)
+    state = await runner.run("2025 年 2 月哪一天营收最高？")
+    assert state.status == "completed"
+    assert state.stop_reason == "metric_clarification"
+    assert provider.calls == 1
+    assert store.replay(state.run_id).stop_reason == "metric_clarification"
+
+
+def test_clarification_question_word_is_not_a_numeric_claim():
+    assert AgentRunner._answer_type("请问您希望使用哪一个口径？", []) == "refusal"
+    assert AgentRunner._answer_type("客流量是一个业务术语，请确认定义。", []) == "refusal"
+    assert AgentRunner._answer_type("请您明确希望使用哪一种定义？", []) == "refusal"
+    assert AgentRunner._answer_type("每行代表一次出行。请您明确客流量口径。", []) == "refusal"
+    assert AgentRunner._answer_type("无法核实，但有一次行程。", []) is None
+    assert AgentRunner._answer_type("数据仅覆盖 2025-01 至 2025-02，无法计算每月 1–7 日。", []) == "refusal"
+    assert AgentRunner._answer_type("无法核实，但有一个订单。", []) is None
+
+
 class InterruptedTextProvider:
     async def summarize(self, items):
         return "summary"
@@ -372,3 +441,142 @@ async def test_failed_stream_persists_reported_usage(tmp_path):
     assert len(failed) == 1
     assert failed[0]["data"]["usage"]["total_tokens"] == 110
     assert failed[0]["data"]["model"] == "actual-model"
+
+
+class RecoveringStreamProvider:
+    def __init__(self, first_usage=None):
+        self.calls = 0
+        self.first_usage = first_usage or {"input_tokens": 4, "output_tokens": 3,
+                                           "total_tokens": 7}
+
+    async def summarize(self, items):
+        return "summary"
+
+    async def stream(self, messages, tools, instructions):
+        self.calls += 1
+        if self.calls == 1:
+            yield ProviderEvent("text_delta", {"text": "unsupported draft 999"})
+            raise ProviderStreamError("truncated", usage=self.first_usage,
+                                      retryable=True, reason="truncated")
+        yield ProviderEvent("tool_delta", {"index": 0, "delta": "{"})
+        yield ProviderEvent("text_delta", {"text": "无法核实该结果。"})
+        yield ProviderEvent("completed", {"output": [], "usage": {
+            "input_tokens": 5, "output_tokens": 2, "total_tokens": 7}})
+
+
+@pytest.mark.asyncio
+async def test_retry_discards_draft_charges_usage_and_records_first_text(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    provider = RecoveringStreamProvider()
+    runner = AgentRunner(provider, ToolRegistry(FakeQuery(), tmp_path), store)
+    state = await runner.run("answer")
+    events = store.events(state.run_id)
+    assert state.status == "completed"
+    assert provider.calls == 2
+    failed = next(event for event in events if event["kind"] == "model_failed")
+    completed = next(event for event in events if event["kind"] == "model_completed")
+    assert failed["data"]["usage"]["total_tokens"] == 7
+    assert failed["data"]["retryable"] is True
+    assert completed["data"]["usage"]["total_tokens"] == 7
+    assert completed["data"]["first_text_ms"] >= completed["data"]["first_event_ms"]
+    assert [event["kind"] for event in events].index("text_discarded") < [
+        event["kind"] for event in events].index("model_retry_scheduled")
+    assert events[-2]["kind"] == "text_committed"
+    assert "999" not in events[-2]["data"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_failed_attempt_usage_can_exhaust_budget_before_retry(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    provider = RecoveringStreamProvider(first_usage={"total_tokens": 11})
+    runner = AgentRunner(provider, ToolRegistry(FakeQuery(), tmp_path), store,
+                         max_total_tokens=10)
+    state = await runner.run("answer")
+    assert state.status == "budget_exceeded"
+    assert provider.calls == 1
+    assert not any(event["kind"] == "model_retry_scheduled"
+                   for event in store.events(state.run_id))
+
+
+class IdleThenAnswerProvider:
+    def __init__(self):
+        self.calls = 0
+
+    async def summarize(self, items):
+        return "summary"
+
+    async def stream(self, messages, tools, instructions):
+        self.calls += 1
+        if self.calls == 1:
+            yield ProviderEvent("tool_delta", {"index": 0, "delta": "{"})
+            await asyncio.sleep(0.1)
+        else:
+            yield ProviderEvent("text_delta", {"text": "无法核实该结果。"})
+            yield ProviderEvent("completed", {"output": [], "usage": {}})
+
+
+@pytest.mark.asyncio
+async def test_idle_watchdog_retries_but_first_text_is_distinct_from_first_event(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    provider = IdleThenAnswerProvider()
+    runner = AgentRunner(provider, ToolRegistry(FakeQuery(), tmp_path), store,
+                         stream_idle_seconds=0.01)
+    state = await runner.run("answer")
+    failed = next(event for event in store.events(state.run_id)
+                  if event["kind"] == "model_failed")
+    assert state.status == "completed"
+    assert provider.calls == 2
+    assert failed["data"]["reason"] == "idle_timeout"
+    assert failed["data"]["first_event_ms"] is not None
+    assert failed["data"]["first_text_ms"] is None
+
+
+class ToolThenFailedStreamProvider:
+    def __init__(self):
+        self.calls = 0
+
+    async def summarize(self, items):
+        return "summary"
+
+    async def stream(self, messages, tools, instructions):
+        self.calls += 1
+        yield ProviderEvent("tool_ready", {"type": "function_call", "call_id": "once",
+                   "name": "run_sql", "arguments": '{"sql":"SELECT COUNT(*) FROM trips"}'})
+        await asyncio.sleep(0.01)
+        raise ProviderStreamError("network lost", retryable=True, reason="transport")
+
+
+@pytest.mark.asyncio
+async def test_stream_never_retries_after_complete_tool_call(tmp_path):
+    query = FakeQuery()
+    store = EventStore(tmp_path / "state.db")
+    provider = ToolThenFailedStreamProvider()
+    runner = AgentRunner(provider, ToolRegistry(query, tmp_path), store,
+                         max_stream_retries=2)
+    state = await runner.run("count")
+    assert state.status == "failed"
+    assert provider.calls == 1
+    assert len(query.calls) <= 1
+    assert not any(event["kind"] == "model_retry_scheduled"
+                   for event in store.events(state.run_id))
+
+
+@pytest.mark.asyncio
+async def test_nonretryable_stream_error_ends_immediately(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    provider = TruncatedProvider()
+    runner = AgentRunner(provider, ToolRegistry(FakeQuery(), tmp_path), store,
+                         max_stream_retries=3)
+    state = await runner.run("count")
+    assert state.status == "failed"
+    assert len([event for event in store.events(state.run_id)
+                if event["kind"] == "model_failed"]) == 1
+
+
+def test_stream_recovery_limits_are_validated(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    tools = ToolRegistry(FakeQuery(), tmp_path)
+    with pytest.raises(ValueError, match="nonnegative"):
+        AgentRunner(TruncatedProvider(), tools, store, max_stream_retries=-1)
+    with pytest.raises(ValueError, match="positive"):
+        AgentRunner(TruncatedProvider(), tools, store, stream_idle_seconds=0)

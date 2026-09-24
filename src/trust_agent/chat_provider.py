@@ -6,7 +6,11 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from .domain import ProviderEvent, ProviderStreamError
+from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
+
+from .domain import ProviderEvent, ProviderStreamError, SummaryResult
+
+_TRANSIENT_ERRORS = (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
 
 
 class ChatCompletionsProvider:
@@ -40,16 +44,19 @@ class ChatCompletionsProvider:
             request["tool_choice"] = "auto"
         if self.extra_body:
             request["extra_body"] = self.extra_body
-        stream = await self.client.chat.completions.create(**request)
         text_parts: list[str] = []
         calls: dict[int, dict[str, Any]] = {}
         finish_reason: str | None = None
         usage: dict[str, Any] = {}
         response_id: str | None = None
         actual_model: str | None = None
-        async for chunk in stream:
+        observed: dict[str, Any] = {"usage": usage, "response_id": response_id,
+                                    "model": actual_model}
+        async for chunk in self._chunks(request, observed):
             response_id = getattr(chunk, "id", None) or response_id
             actual_model = getattr(chunk, "model", None) or actual_model
+            observed["response_id"] = response_id
+            observed["model"] = actual_model
             if getattr(chunk, "usage", None):
                 raw = chunk.usage.model_dump(exclude_none=True)
                 usage = {
@@ -60,6 +67,7 @@ class ChatCompletionsProvider:
                 details = raw.get("completion_tokens_details") or {}
                 if details.get("reasoning_tokens") is not None:
                     usage["reasoning_tokens"] = details["reasoning_tokens"]
+                observed["usage"] = usage
             for choice in chunk.choices:  # Usage-only chunks have no choices.
                 if choice.index != 0:
                     continue
@@ -90,6 +98,7 @@ class ChatCompletionsProvider:
             raise ProviderStreamError(
                 f"Chat Completions stream ended with {finish_reason!r}",
                 usage=usage, model=actual_model, response_id=response_id,
+                retryable=finish_reason in {"length", None}, reason="truncated",
             )
         if int(usage.get("total_tokens") or 0) <= 0:
             raise ProviderStreamError(
@@ -134,7 +143,19 @@ class ChatCompletionsProvider:
                                           "response_id": response_id,
                                           "model": actual_model})
 
-    async def summarize(self, items: list[dict[str, Any]]) -> str:
+    async def _chunks(self, request: dict[str, Any], observed: dict[str, Any]):
+        try:
+            stream = await self.client.chat.completions.create(**request)
+            async for chunk in stream:
+                yield chunk
+        except _TRANSIENT_ERRORS as exc:
+            raise ProviderStreamError(
+                f"transient Chat Completions transport error: {type(exc).__name__}",
+                usage=observed["usage"], model=observed["model"],
+                response_id=observed["response_id"], retryable=True,
+                reason="transport") from exc
+
+    async def summarize(self, items: list[dict[str, Any]]) -> SummaryResult:
         request: dict[str, Any] = {
             "model": self.model,
             "messages": [
@@ -148,7 +169,16 @@ class ChatCompletionsProvider:
         if self.extra_body:
             request["extra_body"] = self.extra_body
         response = await self.client.chat.completions.create(**request)
-        return response.choices[0].message.content or ""
+        raw = response.usage.model_dump(exclude_none=True) if response.usage else {}
+        usage = {"input_tokens": raw.get("prompt_tokens", 0),
+                 "output_tokens": raw.get("completion_tokens", 0),
+                 "total_tokens": raw.get("total_tokens", 0)}
+        if int(usage["total_tokens"] or 0) <= 0:
+            raise ProviderStreamError("summary response did not report token usage")
+        if not response.choices or response.choices[0].finish_reason != "stop":
+            raise ProviderStreamError("summary response was incomplete", usage=usage,
+                                      reason="truncated")
+        return SummaryResult(response.choices[0].message.content or "", usage)
 
     @staticmethod
     def _chat_tool(tool: dict[str, Any]) -> dict[str, Any]:

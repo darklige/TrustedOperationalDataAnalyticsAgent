@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>可信运营数据分析 Agent</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; }
+    body { max-width: 800px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; }
+    textarea { box-sizing: border-box; width: 100%; min-height: 6rem; padding: .75rem; }
+    button { margin: .6rem .5rem .6rem 0; padding: .45rem .9rem; }
+    #answer { white-space: pre-wrap; overflow-wrap: anywhere; min-height: 5rem;
+              padding: 1rem; border: 1px solid #bbb; border-radius: .4rem; }
+    #status { min-height: 1.5rem; color: #37526b; }
+  </style>
+  <script type="module" src="/ui/app.mjs"></script>
+</head>
+<body>
+  <main>
+    <h1>可信运营数据分析 Agent</h1>
+    <form id="question-form">
+      <label for="question">分析问题</label>
+      <textarea id="question" required maxlength="4000"></textarea>
+      <div>
+        <button id="submit" type="submit">开始分析</button>
+        <button id="cancel" type="button" disabled>取消</button>
+        <button id="reconnect" type="button" disabled>重新连接</button>
+      </div>
+    </form>
+    <p id="status" role="status" aria-live="polite">等待问题</p>
+    <h2>已校验的回答</h2>
+    <div id="answer" aria-live="polite"></div>
+  </main>
+</body>
+</html>

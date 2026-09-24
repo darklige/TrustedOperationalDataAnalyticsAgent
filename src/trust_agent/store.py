@@ -105,6 +105,7 @@ class EventStore:
                 state.history.append({"role": "user", "content": data["question"]})
                 state.status = "running"
                 state.answer = ""
+                state.stop_reason = None
             elif kind == "run_resumed":
                 state.status = "running"
             elif kind == "model_completed":
@@ -135,11 +136,14 @@ class EventStore:
             elif kind == "run_completed":
                 state.answer = data["answer"]
                 state.status = "completed"
+                state.stop_reason = data.get("stop_reason")
             elif kind == "run_cancelled":
                 state.status = "cancelled"
+                state.stop_reason = data.get("stop_reason", "cancelled")
             elif kind == "run_failed":
                 state.status = ("budget_exceeded" if data.get("error_type") == "BudgetExceeded"
                                 else "failed")
+                state.stop_reason = data.get("stop_reason", state.status)
             state.turn = max(state.turn, event["turn"])
         return state
 

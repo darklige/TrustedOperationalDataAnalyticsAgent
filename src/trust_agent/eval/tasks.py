@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,7 @@ class EvalCase:
     expected_rows: list[list[Any]] | None
     expected_behavior: str | None
     required_claims: tuple[str, ...] = ()
+    review_expected_rows: tuple[list[list[Any]], ...] = ()
 
     @property
     def is_numeric(self) -> bool:
@@ -66,3 +67,40 @@ def load_cases(path: str | Path) -> list[EvalCase]:
     if not cases:
         raise ValueError(f"no eval cases in {path}")
     return cases
+
+
+def apply_ambiguity_sidecar(cases: list[EvalCase], path: str | Path,
+                            query_service: Any) -> list[EvalCase]:
+    """Add documented alternative results as review-only evidence.
+
+    The frozen case and gold SQL are not changed. An alternative result may
+    downgrade an automatic false to needs_review, never award an auto-pass.
+    """
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if (not isinstance(raw, dict) or raw.get("version") != 1
+            or raw.get("historical_assets_immutable") is not True):
+        raise ValueError("unsupported or mutable ambiguity sidecar")
+    entries = raw.get("ambiguities")
+    if not isinstance(entries, list):
+        raise TypeError("ambiguities must be a list")
+    by_id = {case.id: case for case in cases}
+    seen: set[str] = set()
+    for entry in entries:
+        case_id = entry.get("case_id") if isinstance(entry, dict) else None
+        if case_id in seen or case_id not in by_id:
+            raise ValueError(f"duplicate or unknown ambiguity case: {case_id}")
+        seen.add(case_id)
+        case = by_id[case_id]
+        rows = entry.get("alternative_expected_rows")
+        if (not case.is_numeric or entry.get("decision") != "needs_review"
+                or not isinstance(entry.get("rationale"), str)
+                or not entry["rationale"].strip()
+                or not isinstance(entry.get("alternative_sql"), str)
+                or not isinstance(rows, list)
+                or not all(isinstance(row, list) for row in rows)):
+            raise ValueError(f"invalid alternative for {case_id}")
+        result = query_service.query(entry["alternative_sql"], row_limit=1000)
+        if result.get("truncated") or result.get("rows") != rows:
+            raise ValueError(f"alternative query result differs from sidecar: {case_id}")
+        by_id[case_id] = replace(case, review_expected_rows=(*case.review_expected_rows, rows))
+    return [by_id[case.id] for case in cases]

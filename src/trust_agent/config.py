@@ -21,7 +21,9 @@ def make_provider(model: str | None = None) -> ModelProvider:
     model = model or os.getenv("TRUST_AGENT_MODEL", "")
     base_url = os.getenv("OPENAI_BASE_URL")
     if selected == "responses":
-        return OpenAIResponsesProvider(model, base_url=base_url)
+        return OpenAIResponsesProvider(
+            model, base_url=base_url,
+            max_output_tokens=int(os.getenv("TRUST_AGENT_MAX_OUTPUT_TOKENS", "2048")))
     if selected == "chat_completions":
         extra_body_raw = os.getenv("TRUST_AGENT_CHAT_EXTRA_BODY", "")
         extra_body = json.loads(extra_body_raw) if extra_body_raw else None
@@ -45,4 +47,9 @@ def make_runner() -> AgentRunner:
                        max_turns=int(os.getenv("TRUST_AGENT_MAX_TURNS", "8")),
                        context_char_budget=int(os.getenv("TRUST_AGENT_CONTEXT_CHAR_BUDGET", "45000")),
                        max_total_tokens=int(os.getenv("TRUST_AGENT_MAX_TOTAL_TOKENS", "100000")),
-                       max_wall_seconds=float(os.getenv("TRUST_AGENT_MAX_WALL_SECONDS", "300")))
+                       max_wall_seconds=float(os.getenv("TRUST_AGENT_MAX_WALL_SECONDS", "300")),
+                       model_context_tokens=int(os.getenv("TRUST_AGENT_MODEL_CONTEXT_TOKENS", "32768")),
+                       output_reserve_tokens=int(os.getenv("TRUST_AGENT_OUTPUT_RESERVE_TOKENS",
+                                                        str(max(2048, provider.max_output_tokens)))),
+                       stream_idle_seconds=float(os.getenv("TRUST_AGENT_STREAM_IDLE_SECONDS", "45")),
+                       max_stream_retries=int(os.getenv("TRUST_AGENT_MAX_STREAM_RETRIES", "1")))

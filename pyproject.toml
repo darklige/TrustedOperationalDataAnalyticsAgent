@@ -28,6 +28,9 @@ trust-agent = "trust_agent.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+trust_agent = ["web/*.html", "web/*.mjs"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

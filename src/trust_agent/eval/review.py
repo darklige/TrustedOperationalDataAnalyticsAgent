@@ -9,7 +9,7 @@ from trust_agent.store import EventStore
 from .scoring import TrialScore, score_trace, summarize_trials
 from .tasks import EvalCase
 
-SCORER_VERSION = "2026-09-24-v6"
+SCORER_VERSION = "2026-09-24-v7"
 
 
 def rescore_report(report: dict[str, Any], cases: dict[str, EvalCase],
