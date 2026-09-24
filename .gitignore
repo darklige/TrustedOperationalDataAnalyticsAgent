@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.env
+*.pyc
+.DS_Store
+*.egg-info/
+data/raw/
+data/processed/
+data/*.duckdb
+data/*.duckdb.part
+data/*.duckdb.wal
+runtime/
+*.log

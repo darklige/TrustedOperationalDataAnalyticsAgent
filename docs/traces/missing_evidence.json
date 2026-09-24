@@ -1,0 +1,165 @@
+{
+  "scenario": "missing_evidence",
+  "offline_scripted_provider": true,
+  "status": "completed",
+  "answer": "无法核实增长幅度；此前回答没有查询证据。",
+  "events": [
+    {
+      "seq": 201,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 0,
+      "kind": "run_started",
+      "data": {
+        "question": "2025 年 2 月增长多少？"
+      },
+      "created_at": "2026-09-24T03:32:46.380650+00:00"
+    },
+    {
+      "seq": 202,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 1,
+      "kind": "loop_started",
+      "data": {},
+      "created_at": "2026-09-24T03:32:46.382084+00:00"
+    },
+    {
+      "seq": 203,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 1,
+      "kind": "context_built",
+      "data": {
+        "chars": 48,
+        "compacted": false,
+        "omitted_items": 0
+      },
+      "created_at": "2026-09-24T03:32:46.384556+00:00"
+    },
+    {
+      "seq": 204,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 1,
+      "kind": "model_started",
+      "data": {},
+      "created_at": "2026-09-24T03:32:46.386486+00:00"
+    },
+    {
+      "seq": 205,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 1,
+      "kind": "text_delta",
+      "data": {
+        "text": "2025 年 2 月的行程增长了 20%。"
+      },
+      "created_at": "2026-09-24T03:32:46.387819+00:00"
+    },
+    {
+      "seq": 206,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 1,
+      "kind": "model_completed",
+      "data": {
+        "duration_ms": 3,
+        "usage": {
+          "total_tokens": 0
+        },
+        "output": [
+          {
+            "type": "message",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "2025 年 2 月的行程增长了 20%。"
+              }
+            ]
+          }
+        ]
+      },
+      "created_at": "2026-09-24T03:32:46.389217+00:00"
+    },
+    {
+      "seq": 207,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 1,
+      "kind": "answer_rejected",
+      "data": {
+        "reason": "missing evidence"
+      },
+      "created_at": "2026-09-24T03:32:46.392621+00:00"
+    },
+    {
+      "seq": 208,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 2,
+      "kind": "loop_started",
+      "data": {},
+      "created_at": "2026-09-24T03:32:46.393753+00:00"
+    },
+    {
+      "seq": 209,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 2,
+      "kind": "context_built",
+      "data": {
+        "chars": 359,
+        "compacted": false,
+        "omitted_items": 0
+      },
+      "created_at": "2026-09-24T03:32:46.395821+00:00"
+    },
+    {
+      "seq": 210,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 2,
+      "kind": "model_started",
+      "data": {},
+      "created_at": "2026-09-24T03:32:46.397515+00:00"
+    },
+    {
+      "seq": 211,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 2,
+      "kind": "text_delta",
+      "data": {
+        "text": "无法核实增长幅度；此前回答没有查询证据。"
+      },
+      "created_at": "2026-09-24T03:32:46.398595+00:00"
+    },
+    {
+      "seq": 212,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 2,
+      "kind": "model_completed",
+      "data": {
+        "duration_ms": 2,
+        "usage": {
+          "total_tokens": 0
+        },
+        "output": [
+          {
+            "type": "message",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "无法核实增长幅度；此前回答没有查询证据。"
+              }
+            ]
+          }
+        ]
+      },
+      "created_at": "2026-09-24T03:32:46.399635+00:00"
+    },
+    {
+      "seq": 213,
+      "run_id": "8f86d9b55d5245088787d36b7f4e4f83",
+      "turn": 2,
+      "kind": "run_completed",
+      "data": {
+        "answer": "无法核实增长幅度；此前回答没有查询证据。",
+        "evidence_ids": []
+      },
+      "created_at": "2026-09-24T03:32:46.402547+00:00"
+    }
+  ]
+}

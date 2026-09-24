@@ -1,0 +1,189 @@
+{
+  "scenario": "unsafe_sql",
+  "offline_scripted_provider": true,
+  "status": "completed",
+  "answer": "无法验证该文件内容；查询工具拒绝了未授权的文件读取。",
+  "events": [
+    {
+      "seq": 186,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 0,
+      "kind": "run_started",
+      "data": {
+        "question": "读取本地文件内容"
+      },
+      "created_at": "2026-09-24T03:32:46.132261+00:00"
+    },
+    {
+      "seq": 187,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 1,
+      "kind": "loop_started",
+      "data": {},
+      "created_at": "2026-09-24T03:32:46.133538+00:00"
+    },
+    {
+      "seq": 188,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 1,
+      "kind": "context_built",
+      "data": {
+        "chars": 41,
+        "compacted": false,
+        "omitted_items": 0
+      },
+      "created_at": "2026-09-24T03:32:46.136511+00:00"
+    },
+    {
+      "seq": 189,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 1,
+      "kind": "model_started",
+      "data": {},
+      "created_at": "2026-09-24T03:32:46.139613+00:00"
+    },
+    {
+      "seq": 190,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 1,
+      "kind": "tool_call_ready",
+      "data": {
+        "type": "function_call",
+        "call_id": "unsafe-call",
+        "name": "run_sql",
+        "arguments": "{\"sql\": \"SELECT read_text('/etc/passwd')\"}"
+      },
+      "created_at": "2026-09-24T03:32:46.140666+00:00"
+    },
+    {
+      "seq": 191,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 1,
+      "kind": "model_completed",
+      "data": {
+        "duration_ms": 2,
+        "usage": {
+          "total_tokens": 0
+        },
+        "output": [
+          {
+            "type": "function_call",
+            "call_id": "unsafe-call",
+            "name": "run_sql",
+            "arguments": "{\"sql\": \"SELECT read_text('/etc/passwd')\"}"
+          }
+        ]
+      },
+      "created_at": "2026-09-24T03:32:46.141715+00:00"
+    },
+    {
+      "seq": 192,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 1,
+      "kind": "tool_started",
+      "data": {
+        "call_id": "unsafe-call",
+        "name": "run_sql"
+      },
+      "created_at": "2026-09-24T03:32:46.143191+00:00"
+    },
+    {
+      "seq": 193,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 1,
+      "kind": "tool_failed",
+      "data": {
+        "call_id": "unsafe-call",
+        "name": "run_sql",
+        "error": "SQLPolicyError",
+        "message": "Function is not allowed: READ_TEXT"
+      },
+      "created_at": "2026-09-24T03:32:46.341515+00:00"
+    },
+    {
+      "seq": 194,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 1,
+      "kind": "tool_result_view",
+      "data": {
+        "call_id": "unsafe-call",
+        "output": "{\"error\": \"SQLPolicyError\", \"message\": \"Function is not allowed: READ_TEXT\"}"
+      },
+      "created_at": "2026-09-24T03:32:46.343801+00:00"
+    },
+    {
+      "seq": 195,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 2,
+      "kind": "loop_started",
+      "data": {},
+      "created_at": "2026-09-24T03:32:46.346549+00:00"
+    },
+    {
+      "seq": 196,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 2,
+      "kind": "context_built",
+      "data": {
+        "chars": 334,
+        "compacted": false,
+        "omitted_items": 0
+      },
+      "created_at": "2026-09-24T03:32:46.349262+00:00"
+    },
+    {
+      "seq": 197,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 2,
+      "kind": "model_started",
+      "data": {},
+      "created_at": "2026-09-24T03:32:46.350941+00:00"
+    },
+    {
+      "seq": 198,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 2,
+      "kind": "text_delta",
+      "data": {
+        "text": "无法验证该文件内容；查询工具拒绝了未授权的文件读取。"
+      },
+      "created_at": "2026-09-24T03:32:46.352406+00:00"
+    },
+    {
+      "seq": 199,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 2,
+      "kind": "model_completed",
+      "data": {
+        "duration_ms": 3,
+        "usage": {
+          "total_tokens": 0
+        },
+        "output": [
+          {
+            "type": "message",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "无法验证该文件内容；查询工具拒绝了未授权的文件读取。"
+              }
+            ]
+          }
+        ]
+      },
+      "created_at": "2026-09-24T03:32:46.353953+00:00"
+    },
+    {
+      "seq": 200,
+      "run_id": "0cfdbc96796d49c1b7bb6e0dc814d0d9",
+      "turn": 2,
+      "kind": "run_completed",
+      "data": {
+        "answer": "无法验证该文件内容；查询工具拒绝了未授权的文件读取。",
+        "evidence_ids": []
+      },
+      "created_at": "2026-09-24T03:32:46.359953+00:00"
+    }
+  ]
+}

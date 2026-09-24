@@ -1,0 +1,9 @@
+# Project-scoped Codex MCP server; loaded only for a trusted project.
+# On a different machine, update the Python path and cwd to this checkout.
+[mcp_servers.trustworthy_data_agent]
+command = "/Users/sean.liu5/Documents/Codex/2026-09-24/w/outputs/trustworthy-data-agent/.venv/bin/python"
+args = ["-m", "trust_agent.mcp_server"]
+cwd = "/Users/sean.liu5/Documents/Codex/2026-09-24/w/outputs/trustworthy-data-agent"
+startup_timeout_sec = 20
+tool_timeout_sec = 30
+enabled_tools = ["describe_data", "get_metric", "run_sql", "load_skill"]
