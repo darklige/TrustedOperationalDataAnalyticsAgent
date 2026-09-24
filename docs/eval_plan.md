@@ -78,7 +78,7 @@ python -m trust_agent.eval agent \
   --out work/agent_report.json
 ```
 
-每次 trial 使用独立 run ID，完整事件写入 `--state-db`；报告中的 run ID 可回查 Trace。`--limit` 适合先做小规模冒烟验证。要运行扩展开发集，改用 `--cases evals/dev_cases.jsonl`；冻结调参后用 `--cases evals/heldout_cases.jsonl` 单独运行留出集。首批 12 题基线、Agent 各三次重复属于旧版运行时的开发诊断；随后发现运行时与题意问题，旧 72 题开发集试跑已中止，新版评测待执行。不能把金标校验或 SQL oracle 命中当作 Agent 任务完成率。
+每次 trial 使用独立 run ID，完整事件写入 `--state-db`；报告中的 run ID 可回查 Trace。`--limit` 适合先做小规模冒烟验证。要运行扩展开发集，改用 `--cases evals/dev_cases.jsonl`；冻结调参后用 `--cases evals/heldout_cases.jsonl` 单独运行留出集。首批 12 题基线、Agent 各三次重复属于旧版运行时的开发诊断；随后发现运行时与题意问题，旧 72 题开发集试跑已中止。修复版 72 题开发集的 Agent 与基线各 216 次试验已完成，结果见 [`live_eval_report.md`](live_eval_report.md)。不能把金标校验或 SQL oracle 命中当作 Agent 任务完成率。
 
 较长的评测可用 `--checkpoint runtime/agent_eval.jsonl`，若中断则保持完全相同的参数、环境模型设置与 `--state-db`，再加 `--resume`。基线命令也支持这两个选项，并建议同时设置 `--predictions-out`，使预测可在后续无模型重评。检查点首行存调用元数据，后续每完成一条 trial 就写入评分（基线还保存预测）并刷盘；续跑仅跳过已有记录。续跑会校验题集 SHA、case/trial 顺序、请求模型、provider 与非密钥设置哈希、数据文件路径/大小/修改时间、Agent 预算和 Trace 数据库路径；损坏行、重复 trial 或缺失 Agent Trace 会报错，避免静默混合不同实验。检查点不保存密钥。一次试验若在写入检查点前中断，可能留下孤立 Trace，续跑会重新运行该 trial，不把孤立 Trace 算作完成。
 
@@ -132,4 +132,4 @@ python -m trust_agent.eval rescore \
 
 用 `qwen3.8-max-0902` 对原始 Q01–Q12 各运行 3 次单轮 Text-to-SQL，并在修正 Decimal 数值比较、周度标签待审、最终文字待审规则后，用**原始预测**无模型重评。36 个 trial 中，27 个为数值题：20 个 `sql_correct=true`、5 个 `false`、2 个因周度标签需人工核对而未判定；另 9 个行为题无数值 oracle。确定可判的 SQL oracle 命中是 **20/25**，不能把 2 个未判定数值题或 9 个行为题当成正确。新版任务状态为 5 fail、31 needs_review、0 pass，人工评阅数为 0；任务完成率保持空值。平均单 trial 延迟约 3.93 秒，总输入 10,794 token、总输出 5,901 token。这些数值只说明当前首批题的 SQL 生成与调用开销；模型在执行 SQL 前输出答案，不能和多轮 Agent 的最终答案完成率直接比较。
 
-Agent 在同一首批 12 题上以 3 次重复、每 trial 8 轮/16 工具/30,000 总 token/120 秒预算运行，完成 36 次并保存全部检查点与 Trace。v5 规则无模型重评后，27 次数值题中 15 次 SQL true、0 次 false、12 次 undecided，另有 9 次行为题；36 次任务均待人工复核。平均单 trial 延迟约 10.57 秒，总输入/输出 177,759/19,189 token，100 次工具调用。Agent 与基线自动判定覆盖率不同，不能直接比较总体准确率或声称提升。逐题复核包已导出；72 题开发集评测正在进行，留出集尚未使用。
+Agent 在同一首批 12 题上以 3 次重复、每 trial 8 轮/16 工具/30,000 总 token/120 秒预算运行，完成 36 次并保存全部检查点与 Trace。v5 规则无模型重评后，27 次数值题中 15 次 SQL true、0 次 false、12 次 undecided，另有 9 次行为题；36 次任务均待人工复核。平均单 trial 延迟约 10.57 秒，总输入/输出 177,759/19,189 token，100 次工具调用。Agent 与基线自动判定覆盖率不同，不能直接比较总体准确率或声称提升。逐题复核包已导出。后续修复版开发集两组各 216 次结果见单独记录，不能与旧版混为同一次实验。
