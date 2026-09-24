@@ -1,0 +1,9 @@
+# Copy to config.toml and replace both paths with your checkout's absolute path.
+# Codex loads the project MCP server after you trust this project.
+[mcp_servers.trustworthy_data_agent]
+command = "/ABSOLUTE/PATH/TO/PROJECT/.venv/bin/python"
+args = ["-m", "trust_agent.mcp_server"]
+cwd = "/ABSOLUTE/PATH/TO/PROJECT"
+startup_timeout_sec = 20
+tool_timeout_sec = 30
+enabled_tools = ["describe_data", "get_metric", "run_sql", "load_skill"]

@@ -54,7 +54,7 @@ HTTP 接口：`POST /runs` 传入 `{"question":"..."}`，得到 `run_id`；随�
 
 ## 评测与复现
 
-评测集共 **92 题**：原始 `evals/gold_cases.jsonl` 12 题，加上 `evals/expanded_cases.jsonl` 80 题；`evals/dev_cases.jsonl` 与 `evals/heldout_cases.jsonl` 分别含 72 和 20 题。其中 79 条数值金标已通过生产查询服务复核；13 条行为题需要人工按 rubric 评阅。评测设计见 [docs/eval_plan.md](docs/eval_plan.md)，[真实模型评测记录](docs/live_eval_report.md)保留冻结配置、分母和调用成本。评测脚本比较查询执行结果、检查 Trace 中的工具/证据行为，并记录重复 trial、延迟和 token 使用量。**首批 12 题的基线/Agent 三次重复是上一版运行时的开发诊断结果。修复版 72 题开发集和冻结的 20 题留出集，Agent 与同模型单轮基线各运行 3 次，共 552 次 trial，并已从持久化 Trace/原预测无模型重评。最终文字及行为题仍需人工审核，不能宣称整体任务完成率。**
+评测集共 **92 题**：原始 `evals/gold_cases.jsonl` 12 题，加上 `evals/expanded_cases.jsonl` 80 题；`evals/dev_cases.jsonl` 与 `evals/heldout_cases.jsonl` 分别含 72 和 20 题。其中 79 条数值金标已通过生产查询服务复核；13 条行为题需要人工按 rubric 评阅。评测设计见 [docs/eval_plan.md](docs/eval_plan.md)，[真实模型评测记录](docs/live_eval_report.md)保留冻结配置、分母和调用成本；[公开评测快照](docs/eval_artifacts/README.md)提供逐 trial 报告与待审材料。评测脚本比较查询执行结果、检查 Trace 中的工具/证据行为，并记录重复 trial、延迟和 token 使用量。**首批 12 题的基线/Agent 三次重复是上一版运行时的开发诊断结果。修复版 72 题开发集和冻结的 20 题留出集，Agent 与同模型单轮基线各运行 3 次，共 552 次 trial，并已从持久化 Trace/原预测无模型重评。最终文字及行为题仍需人工审核，不能宣称整体任务完成率。**
 
 ```bash
 .venv/bin/python -m trust_agent.eval score --cases evals/gold_cases.jsonl \
