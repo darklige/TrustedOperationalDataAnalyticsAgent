@@ -57,7 +57,8 @@ class OpenAIResponsesProvider:
                                                            "arguments": item["arguments"]})
                 usage = response.usage.model_dump(exclude_none=True) if response.usage else {}
                 yield ProviderEvent("completed", {"output": output, "usage": usage,
-                                                  "response_id": response.id})
+                                                  "response_id": response.id,
+                                                  "model": response.model})
             elif event.type in {"response.failed", "error", "response.incomplete"}:
                 raise RuntimeError(f"model stream ended with {event.type}")
 

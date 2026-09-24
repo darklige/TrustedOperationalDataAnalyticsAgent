@@ -67,7 +67,7 @@ def main() -> int:
         raise ValueError(f"expected 79 total numeric gold cases, got {checked}")
     print("verified: 12 original unchanged; 80 new cases; 72 dev / 20 heldout")
     print("production QueryService: 79/79 numeric gold SQL results match (70 new)")
-    print("13 behavioral cases require human rubric review; no model was run")
+    print("13 behavioral cases require human rubric review; this verifier did not run a model")
     return 0
 
 

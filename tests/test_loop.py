@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from trust_agent.domain import ProviderEvent
+from trust_agent.domain import ProviderEvent, ProviderStreamError
 from trust_agent.loop import AgentRunner
 from trust_agent.store import EventStore
 from trust_agent.tools import ToolRegistry
@@ -179,3 +179,25 @@ async def test_token_budget_is_terminal(tmp_path):
     state = await runner.run("answer")
     assert state.status == "budget_exceeded"
     assert store.events(state.run_id)[-1]["data"]["error_type"] == "BudgetExceeded"
+
+
+class TruncatedProvider:
+    async def summarize(self, items):
+        return "summary"
+
+    async def stream(self, messages, tools, instructions):
+        raise ProviderStreamError("truncated", usage={"input_tokens": 10,
+            "output_tokens": 100, "total_tokens": 110}, model="actual-model")
+        yield  # pragma: no cover - keep the method an async generator
+
+
+@pytest.mark.asyncio
+async def test_failed_stream_persists_reported_usage(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    runner = AgentRunner(TruncatedProvider(), ToolRegistry(FakeQuery(), tmp_path), store)
+    state = await runner.run("count")
+    assert state.status == "failed"
+    failed = [event for event in store.events(state.run_id) if event["kind"] == "model_failed"]
+    assert len(failed) == 1
+    assert failed[0]["data"]["usage"]["total_tokens"] == 110
+    assert failed[0]["data"]["model"] == "actual-model"

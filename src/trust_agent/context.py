@@ -31,19 +31,17 @@ class ContextBuilder:
         if current_chars <= self.char_budget:
             return ContextView(messages, False, 0, current_chars)
 
-        # Reserve room for the new summary, and keep call/result pairs together.
-        cut = max(state.compacted_until, len(history) - self.keep_recent)
-        while cut > state.compacted_until and history[cut].get("type") == "function_call_output":
-            cut -= 1
+        # Reserve room for the summary. Only cut after every tool call in a batch
+        # has its output, so Chat Completions never receives orphan tool messages.
+        cuts = self._safe_cuts(history, state.compacted_until)
+        desired = max(state.compacted_until, len(history) - self.keep_recent)
+        cut = max((candidate for candidate in cuts if candidate <= desired),
+                  default=state.compacted_until)
         target = max(1, self.char_budget - min(8_000, self.char_budget // 4))
-        while cut < len(history) - 1 and self._chars(history[cut:]) > target:
-            next_cut = cut + 1
-            while (next_cut < len(history) - 1 and
-                   history[next_cut].get("type") == "function_call_output"):
-                next_cut += 1
-            if history[next_cut].get("type") == "function_call_output":
-                break  # The last tool result needs its matching call.
-            cut = next_cut
+        for candidate in cuts:
+            if self._chars(history[cut:]) <= target:
+                break
+            cut = max(cut, candidate)
         older, recent = history[state.compacted_until:cut], history[cut:]
         if older:
             new_summary = await provider.summarize(older)
@@ -67,6 +65,20 @@ class ContextBuilder:
     @staticmethod
     def _chars(messages: list[dict[str, Any]]) -> int:
         return len(json.dumps(messages, ensure_ascii=False, default=str))
+
+    @staticmethod
+    def _safe_cuts(history: list[dict[str, Any]], start: int) -> list[int]:
+        pending: set[str] = set()
+        cuts = [start]
+        for index in range(start, len(history) - 1):
+            item = history[index]
+            if item.get("type") == "function_call":
+                pending.add(item["call_id"])
+            elif item.get("type") == "function_call_output":
+                pending.discard(item["call_id"])
+            if not pending:
+                cuts.append(index + 1)
+        return cuts
 
     @staticmethod
     def _with_summary(summary: str, history: list[dict[str, Any]]) -> list[dict[str, Any]]:

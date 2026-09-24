@@ -35,7 +35,8 @@ class ToolRegistry:
                     raise ValueError("DuckDB snapshot does not match frozen source manifest")
                 self.dataset_version = json.loads(manifest_path.read_text()).get("snapshot", "unknown")
         self._metrics = {
-            "trip_count": "Trips after cleaning. COUNT(*) over trips; always specify date window.",
+            "trip_count": "Trips after cleaning. COUNT(*) over trips; filter source_month "
+            "with YYYY-MM values such as '2025-01', or use a half-open pickup_at date range.",
             "trip_duration_minutes": "Date_diff in minutes between pickup and dropoff; exclude nonpositive durations.",
             "median_trip_duration": "MEDIAN(trip_duration_minutes); compare like-for-like routes and hours.",
             "airport_trip": "A trip whose pickup or dropoff zone has service_zone='EWR' or zone contains 'Airport'.",
@@ -78,7 +79,11 @@ class ToolRegistry:
 
         if name == "describe_data":
             schema = await asyncio.to_thread(self.query_service.schema)
-            return {"schema": schema, "caveat": "Observational data; do not claim causation."}
+            return {"schema": schema,
+                    "dataset_version": self.dataset_version,
+                    "coverage": "2025-01-01 through 2025-02-28, NYC local time",
+                    "source_month_format": "YYYY-MM (values '2025-01' and '2025-02')",
+                    "caveat": "Observational data; do not claim causation."}
         if name == "get_metric":
             metric = self._metrics.get(arguments["name"])
             if not metric:

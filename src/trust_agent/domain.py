@@ -10,6 +10,17 @@ class ProviderEvent:
     data: dict[str, Any] = field(default_factory=dict)
 
 
+class ProviderStreamError(RuntimeError):
+    """A failed model stream with any usage the gateway reported before failure."""
+
+    def __init__(self, message: str, *, usage: dict[str, Any] | None = None,
+                 model: str | None = None, response_id: str | None = None):
+        super().__init__(message)
+        self.usage = usage or {}
+        self.model = model
+        self.response_id = response_id
+
+
 @dataclass(slots=True)
 class RunState:
     run_id: str

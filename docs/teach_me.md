@@ -221,3 +221,86 @@ SQL 文本相异不代表答案不同，所以数值题按执行结果判分。T
 ### 验证与面试讲法
 
 `tests/test_provider.py` 现在直接用安装版 SDK 的 `ResponseFunctionCallArgumentsDoneEvent` 和 `ResponseOutputItemDoneEvent` 类型构造测试流，覆盖正常派发和完成响应兜底；本次单项测试 **2 passed**，全量回归 **49 passed**，Ruff **All checks passed**，源文件哈希与 **79/79** 数值金标复核仍通过。`codex mcp list` 显示本项目及两个官方文档 MCP 为 enabled。这只证明本机 SDK 事件结构与适配代码一致，仍需真实 API key 才能做端到端模型验证。面试可讲：“流式参数完成不等于完整工具输出项；我用 SDK 生成类型检查事件契约，并在输出项完成时派发，避免半截参数或缺少 call_id 导致误执行。”
+
+## 阶段 P2/P6：接入兼容 Chat Completions 网关并做真实小样本（2026-09-24）
+
+### 完成了什么
+
+用户提供的服务使用 `/v1/chat/completions`，不是 Responses API。新增 `src/trust_agent/chat_provider.py` 实现同一 `ModelProvider` 契约；`config.make_provider` 通过 `TRUST_AGENT_PROVIDER` 选择适配器，`OPENAI_BASE_URL` 指向 `/v1` 基础地址。CLI/API 和 `eval baseline|agent` 现在共用供应商工厂，避免开发演示已接入但评测仍请求错误 API。密钥只通过进程环境变量传入，未写入仓库、报告或 Trace。
+
+Chat 工具定义需把项目的平铺 `{type,name,description,parameters}` 转为嵌套的 `{type,function:{...}}`。旧历史以 `function_call`/`function_call_output` 保存；发送给 Chat 模型时，要把同轮多个调用合并进一条 `assistant.tool_calls`，随后按调用 ID 追加 `role=tool` 结果。`ContextBuilder` 现在只在调用与所有结果配齐的位置切分，防止压缩后出现没有配对调用的工具结果。原始事件依然不裁剪。
+
+流式响应按 `delta.tool_calls[*].index` 拼接参数片段，并把片段继续作为 `tool_delta` 显示。与 Responses API 不同，Chat 流没有每个调用单独的完整事件；因此待整轮正常结束后，检查调用 ID、函数名和 JSON 对象，再发 `tool_ready`。`length`、过滤或缺少完成原因均不执行工具。本次真实网关探针有一个重要兼容细节：虽然返回了工具调用，`finish_reason` 却是 `stop`；适配器接受这种**流已完整结束且调用参数合法**的组合。用量的 `prompt_tokens/completion_tokens` 归一化为本项目的 `input_tokens/output_tokens`，报告保留请求型号和实际返回型号。
+
+### 如何验证，以及失败给我们什么信息
+
+`tests/test_chat_provider.py` 使用本机 OpenAI SDK 的 `ChatCompletionChunk` 构造多工具片段、用量末块、截断和消息转换测试；`tests/test_context.py` 检查多工具批次不会被压缩拆开；`tests/test_config.py` 检查供应商选择。项目全量测试在接入后为 **57 passed**，Ruff **All checks passed**。不需要密钥即可复跑这些测试。
+
+真实网关的普通请求、流式工具调用和 `assistant.tool_calls → role=tool` 续轮均验证成功。请求名 `Qwen3.5-Turbo` 的响应 `model` 字段却是 `Qwen3.5-0.8B`，因此任何效果报告都必须标出**实际型号**。用这一实际型号对开发题做了极小样本试验：Q01 单轮基线一次输出非单一 JSON 而失败；Q01 Agent 一次曾成功调用查询，但加了用户未要求的支付方式过滤，且没有完成证据引用；Q10 Agent 一次也未在预算内完成。这些结果说明传输协议与工具闭环已打通，同时暴露模型能力/路由问题。三个 trial 不足以给出总体准确率，更不能写简历提升百分比。真实试验文件留在被忽略的 `runtime/`，没有提交临时密钥或未经审查的服务输出。
+
+### 面试时如何讲、下一步
+
+“同一个 Agent loop 接两个模型协议，核心状态机不认识供应商对象。Chat Completions 的工具参数要按 index 聚合，且必须把一次多工具调用还原为一个 assistant 消息和多个 tool 结果。通过真实网关探针我发现非标准停止原因和模型别名路由，修了兼容层，并让评测报告记录实际型号。首轮失败被完整记录，没有把接口成功当成任务成功。”下一步需确认可用于评测的实际模型，在开发集做有限 trial，再冻结配置运行留出集并人工审核行为题；不能把小样本失败转写成完整评测结论。
+
+## 阶段 P6 迭代：真实模型筛选、评分器校准和人工复核入口（2026-09-24）
+
+### 本阶段做了什么
+
+在第二个兼容 Chat Completions 的网关上，分别以 `qwen3.8-max`、`qwen3.8-flash` 运行了 Q01/Q02/Q04/Q05/Q10 五道**开发题**的单轮基线和 Agent；每题每配置只运行一次。Max Agent 原始报告看起来有两条失败，但沿 `run_id` 回看实际 SQL、查询结果、最终回答和金标后，发现评分器本身造成假阴性。Q04 返回列的次序不同，工作日机场时长和样本数仍可与金标对应；Q05 返回信用卡计数与信用卡+现金分母，回答再计算百分比。前者可以在确定性结果比较中允许列排列和展示精度误差；后者需要人核对回答是否正确使用了分子、分母，所以不能自动 pass。Q02 的查询多返回了排行其他行，第一名虽然正确，也需要审查最终回答是否只提取了用户所需结论；Q10 的超时间范围答复本来就是行为 rubric 题。
+
+Q05 基线初始报告中的 fail 还暴露了另一种评测器问题：查询结果中的 `Decimal` 类型在序列化/结果比较时产生假阴性。评分器现接受可验证的 Decimal 数值字符串，并须对原始预测重评，不能把这个 fail 直接算作模型缺陷。另一个 Q08 基线样本周度度量值匹配但分组标签不同；评分器转为 `needs_review`，由人核对周标签与时间桶口径，避免只比较数值或直接误判失败。每次修评分器都保留原报告、复评分数和修正原因，避免在开发集上无记录地改口径。
+
+单轮基线当前在数据库执行前生成文字说明，不能看到最终查询行。五题原始输出中，多个基线说明只解释查询方法，没有最终数值。因此基线与 Agent 现在只能公平比较 SQL 结果正确性及调用开销；若要比较“完整回答”，必须为基线预先定义统一的查询结果呈现步骤并单独评估，不应直接拿两条路径的任务完成率相减。
+
+`eval/scoring.py` 在有界搜索内比较列排列、忽略结果行顺序，金标结果是候选结果前缀或候选提供可核验的原始分子分母时返回 `needs_review`。即使数值查询完全匹配，也只记录 `sql_correct=true`，最终任务状态等待人工核对答案文字。这个状态表示“自动评分信息不足”，不是成功。`TrialScore` 增加 `human_review`，汇总同时显示 `passed/failed/needs_review`、`auto_scored/human_reviewed`，并让 `task_completion_rate_on_decided` 在任何 trial 待审时保持空值，避免选择性分母。`model_failed` 的 token 用量也被记录并计入汇总，模型流中途截断不会使消耗凭空消失。
+
+`eval/review.py` 新增两条不调用模型的路径。`rescore_report` 读取原报告中的 `run_id`，从 SQLite EventStore 回放 Trace，再以当前评分器重算，保留实测延迟和模型元数据；因此评分规则变更后无需耗费 token 重跑模型。`apply_reviews` 只允许把 Trace 未失败的 `needs_review` trial 改为 pass/fail，要求精确的 case ID、trial、run ID、审核人和非空理由，并拒绝重复审核。CLI 分别提供 `rescore` 和 `review`。人工决定属于审核人的判断，程序只校验其记录是否完整；当前试测没有填写人工结论。
+
+### 如何复现与读取结果
+
+先固定 `TRUST_AGENT_PROVIDER=chat_completions`、模型名和 `/v1` 基础地址，并通过环境变量提供自己的密钥。`TRUST_AGENT_MAX_OUTPUT_TOKENS` 控制单次 Chat 输出上限；`TRUST_AGENT_CHAT_EXTRA_BODY` 可传兼容网关需要的 JSON 参数。调试先用开发题子集，报告和 SQLite Trace 都留在被忽略的 `runtime/`。`python -m trust_agent.eval rescore --cases evals/dev_cases.jsonl --db data/nyc_taxi.duckdb --report runtime/agent_report.json --state-db runtime/eval_agent.sqlite3 --out runtime/rescored.json` 可在已存 Trace 上重评。人工审核 JSONL 的结构及 `review` 命令见 `docs/eval_plan.md`。切换评分器后要记录版本，保持原始报告，不能只留下修正后的分数。
+
+旧版评分器对五题 Max Agent 的重评是 **Q01/Q04 SQL 匹配并标为 pass，Q02/Q05/Q10 needs_review，0 fail，5/5 Trace 检查通过**。这两个自动 pass 不能证明最终文字无误；新版评分器把 SQL 匹配的任务状态也保留为 `needs_review`，另用 `sql_correct=true` 记录数值查询结果。五题都没有人工任务完成判定，旧报告的 `2/2` 已判定完成率不代表五题完成率。Max 基线原报告为 3 pass、1 fail、1 needs_review；Flash 基线初始为 1 pass、3 fail、1 needs_review，Flash Agent 初始为 0 pass、3 fail、2 needs_review。Flash 报告还没按新评分器重评，不能用这些数字证明 Max 优于 Flash，更不能推出 92 题准确率、成本优势或简历提升比例。`qwen3.8-max-0902` 的 Q01 单轮基线探针已通过，实际模型名与请求一致；留出集尚未触碰。下一步需冻结评分器/预算/代码，再做重复试验和人工 rubric。
+
+### 面试时如何讲
+
+“真实试测除了验证模型接入，还验证了评测器。我发现 SQL 结果在列顺序和展示精度上可以等价，而原始分子分母证据不能被机器直接当成最终百分比正确。于是把确定性判分和待人工复核分开，并做了可回放重评：评分规则修正时复用已保存 Trace，不重算模型，也保留原始报告和审查理由。当前只有开发集五题筛选，我会如实给出分母和待审数量。”
+
+## 阶段 P6 迭代：可续跑评测日志（2026-09-24）
+
+### 完成内容与实现
+
+正式开发集有 72 题，每题重复试验时，一个进程中断不能让所有已完成 trial 的成果丢失。`eval/runner.py` 的 `TrialJournal` 把评测当作可追加的 JSONL 日志：首行固定实验元数据，每个完成的 trial 独立写一行并 `flush`/`fsync`；基线同时保存模型预测，Agent 保留可定位 SQLite Trace 的 `run_id`。`eval/__main__.py` 的 `baseline`、`agent` 新增 `--checkpoint` 和 `--resume`。恢复时按 `case_id+trial` 跳过已完成项，继续生成最终完整报告，而不是把多个局部报告手工拼接。
+
+日志头用于拒绝错配：题集 SHA-256、题目与重复序号、请求模型、供应商类型与配置哈希、数据文件路径/大小/修改时间，以及 Agent 的轮次、工具、token、时间预算与 Trace 数据库路径必须一致。密钥不在头部或 trial 行中。恢复还拒绝损坏 JSON、未完成行、重复键和 Agent Trace 丢失。若模型刚执行完但日志尚未落盘就崩溃，可能留下孤立 Trace；恢复会重新运行这一 trial，这比把没有评分的动作当作成功更可靠。
+
+使用示例：`python -m trust_agent.eval agent --cases evals/dev_cases.jsonl --db data/nyc_taxi.duckdb --model "$TRUST_AGENT_MODEL" --repeats 3 --state-db runtime/dev_agent.sqlite3 --checkpoint runtime/dev_agent.jsonl --out runtime/dev_agent_report.json`；中断后原命令添加 `--resume`。基线同理，并设置 `--predictions-out runtime/dev_baseline_predictions.jsonl`，便于之后运行 `eval rescore --predictions ...`，无模型调用地修正旧评分。这样才可把原始预测、Trace、重评分和人工审查连成可追溯链条。检查点不是任务跨进程自动续执行：它只恢复**已完成 trial 后的下一题**，不接管中断时正在跑的单个模型请求。
+
+### 首批 12 题的真实基线记录
+
+固定版本 `qwen3.8-max-0902` 的 Q01 基线探针确认了请求和响应型号一致。随后在原始 Q01–Q12 上做每题 3 次单轮基线，并保存原始预测；修正 Decimal 数值字符串、周标签待审和最终文字待审规则后，**用原预测重评，没有重跑模型来改写试验**。36 次里，20 次数值 SQL 匹配、5 次不匹配、2 次周标签需核对，另 9 次是行为题。`20/25` 是已确定数值 SQL 的命中率；任务状态为 5 fail、31 needs_review、0 pass，尚未人工评阅，不能叫作 80% 任务完成率。平均延迟约 3.93 秒，合计 10,794 输入 token 和 5,901 输出 token。Agent 同批次以三次重复和每 trial 8 轮、16 工具、30,000 总 token、120 秒预算运行中；此处尚无 Agent 汇总。这个阶段能展示如何在真实试验后追查评分假阴性，同时坚持保留预测和各版评分结果。留出集未参与。
+
+## 阶段 P6 复核：保守评分、证据包与首批 Agent 结果（2026-09-24）
+
+### 本阶段的代码与设计
+
+真实试验暴露了“SQL 查到正确数据”和“最终回答正确”之间的差距。`eval/scoring.py` 的 `sql_correct` 只说明候选 SQL 结果能否被金标直接确认；即使为 `true`，任务 `status` 仍是 `needs_review`，直到审核最终文字。周度数值相同而标签写法不同、返回多余排序行、引用多个查询计算百分比、返回原始比例后在答案换算，都先标为待复核，绝不自动通过。新版 `numeric_case` 让汇总显式展示数值题的 true/false/undecided 与行为题数量，`numeric_oracle_coverage` 说明自动结论覆盖多少数值 trial；有任何待审 trial 时任务完成率为 `null`。当前评分规则为 `2026-09-24-v5`。
+
+新增 `scripts/export_review_queue.py`：从报告、冻结题集和 Trace（或基线预测）导出 `needs_review` 的逐题证据与空白审核模板。它核对题集 SHA、trial 身份和 Trace 存在性，展示问题、金标或行为 rubric、答案、所引 SQL 和查询结果。审核人自己判断后填写 `decision/reviewer/reason`，再用 `eval review` 合并；脚本不会替审核人下结论。基线预测未保存 SQL 执行结果，导出时明确标记该限制。
+
+### 实测与限制
+
+固定型号 `qwen3.8-max-0902` 对原始 12 题每题运行 3 次。基线原预测在 v5 下无模型重评：36 次中 27 次数值题有 20 次 SQL true、5 次 false、2 次 undecided，另 9 次行为题；31 个任务待审、5 个失败、0 个已审通过。Agent 原 Trace 在 v5 下无模型重评：36 次中 27 次数值题有 15 次 SQL true、0 次 false、12 次 undecided，另 9 次行为题；36 个任务待审、0 个已审通过。Agent 的 12 个 undecided 包含多条查询推导出的结果；**两者自动判定覆盖率不同，不能据此说 Agent 更准确**。基线平均每 trial 约 3.93 秒、总输入/输出 10,794/5,901 token；Agent 约 10.57 秒、177,759/19,189 token 与 100 次工具调用。这是首批开发题的真实调用开销，不代表 92 题成绩或任务完成率。两条路径都已导出待复核 Markdown；人工评阅数目前为 0。
+
+在项目根目录可复现证据包：
+
+```bash
+.venv/bin/python scripts/export_review_queue.py \
+  --cases evals/gold_cases.jsonl \
+  --report runtime/aliyun_max0902_agent_gold12x3_rescored.json \
+  --state-db runtime/aliyun_max0902_agent_gold12x3.sqlite3 \
+  --out runtime/aliyun_max0902_agent_gold12x3_review_queue.md \
+  --format markdown
+```
+
+本阶段全量单元测试 **80 passed**、Ruff 通过；数据源 SHA 与 79/79 数值金标仍通过核验。面试可讲：“我保存每次模型运行的原始 Trace，评测规则改版时重放原结果而不重抽样；SQL oracle 命中与最终答案通过分开统计，并显示未判定的分母。长批次用配置校验和逐条落盘续跑，审核人能从答案一路追到 query_id、SQL、结果和数据版本。”下一步在 v5 规则下完成 72 道开发题与冻结的 20 道留出题，人工复核后才可报告端到端任务完成率。

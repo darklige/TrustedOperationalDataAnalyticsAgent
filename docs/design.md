@@ -139,17 +139,33 @@ MCP server 只包装已注册的只读工具，不复制数据访问逻辑；调
 
 ## 12. 当前实现映射与验收状态（2026-09-24）
 
-实际 Python 包为 `src/trust_agent/`，没有沿用第 2 节建议的更深目录层级。`loop.py` 实现状态初始化、循环、事件转发、工具并发与终止；`provider.py` 归一化 Responses API 流；`store.py` 保存和重放 Trace；`context.py` 构建有摘要的模型视图；`memory.py` 处理显式记忆；`tools.py` 注册工具；`sql/service.py` 是查询隔离边界；`api.py`/`cli.py`/`mcp_server.py` 分别负责 HTTP、终端和 MCP；`eval/` 负责 trial 和评分。保留单层包可让面试演示时沿一次请求快速跳转；若今后出现第二种数据库或供应商，再按稳定接口拆分。
+实际 Python 包为 `src/trust_agent/`，没有沿用第 2 节建议的更深目录层级。`loop.py` 实现状态初始化、循环、事件转发、工具并发与终止；`provider.py` 与 `chat_provider.py` 分别归一化 Responses 和 Chat Completions 流，`config.make_provider` 选择协议；`store.py` 保存和重放 Trace；`context.py` 构建有摘要的模型视图；`memory.py` 处理显式记忆；`tools.py` 注册工具；`sql/service.py` 是查询隔离边界；`api.py`/`cli.py`/`mcp_server.py` 分别负责 HTTP、终端和 MCP；`eval/` 负责 trial、评分、重评与人工决定导入。保留单层包可让面试演示时沿一次请求快速跳转；若今后出现第二种数据库，再按稳定接口拆分。
 
 | 阶段 | 当前状态 | 验证边界 |
 | --- | --- | --- |
 | P0 | 已完成公开数据快照与 12 条首批题 | 源哈希、行数与金标复核 |
 | P1 | 已完成自实现 loop 与追加 Trace | 假模型的多轮、部分 JSON、重放测试 |
-| P2 | 已实现 Responses 适配、CLI、FastAPI SSE | 假流与 API 测试通过；无 API key，真实模型尚未测 |
+| P2 | 已实现 Responses 与 Chat Completions 适配、CLI、FastAPI SSE | 假流/API 测试及兼容网关小样本往返通过；端到端任务表现见下方限制 |
 | P3 | 已完成本地 SQL 策略和短生命周期查询进程 | 安全边界测试与真实快照金标通过；未达到生产级 OS 隔离 |
 | P4 | 已完成近似字符预算压缩、显式记忆、按需 Skill | 离线测试通过；未实现 tokenizer 精确预算或语义记忆检索 |
 | P5 | 已完成共用 ToolRegistry 的 MCP stdio 适配 | SDK 客户端真实往返及 Codex MCP 列表验证 |
-| P6 | 已完成 92 题资产、72/20 拆分、基线与 Agent 评测入口 | 79/79 数值金标复核；真实模型 trial 与 13 条人工评分待执行 |
+| P6 | 已完成 92 题资产、72/20 拆分、基线与 Agent 评测入口、逐 trial 检查点 | 79/79 数值金标复核；五题筛选及首批 12 题基线和 Agent 各三次重复已做，72 题开发集运行中；完整试验与人工评分待完成 |
 | P7 | 已完成 README 和三条离线轨迹 | 脚本化假模型演示；简历效果数字须待真实 trial |
 
 现有 `EventStore.replay` 能从事件重建已记录状态，SSE 能按序列号续传；服务重启不会自动恢复正在调用的模型或工具。最终答案检查只要求有效查询引用或明确无法核实，尚未逐句核对每个数值断言。项目适合本地展示 Agent 工程方法，不能直接作为多用户生产服务部署。
+
+### 12.1 Chat Completions 适配（2026-09-24）
+
+`config.make_provider` 在 `responses` 与 `chat_completions` 间选择，Agent、基线和 CLI/API 共用。`chat_provider.py` 将本项目的 Responses 形态历史转换为 Chat 的 `system/user/assistant(tool_calls)/tool` 消息，多个同轮函数调用合成一条 assistant 消息。流式解析按 `tool_call.index` 聚合 `id/name/arguments`；只有整轮正常结束且全部参数可解析为 JSON 对象后才发 `tool_ready`。Chat 协议没有逐个输出项完成事件，因此这个适配器不能像 Responses 一样在仍在接收整轮流时执行工具。`ContextBuilder` 只在所有工具结果都已配齐的边界压缩，避免产生孤立的 `role=tool` 消息。
+
+兼容网关探针实际返回工具调用、SSE 片段和用量；它把工具轮标为 `finish_reason=stop`，因此不能只把标准的 `tool_calls` 停止原因视为成功。请求的 `Qwen3.5-Turbo` 在实测响应中标为 `Qwen3.5-0.8B`；评测报告分别记录请求与实际型号。一次 Q01 基线和 Agent trial、一次 Q10 Agent trial 都未通过，说明协议打通不等于模型能完成数据分析。三个样本不足以推断总体表现，完整评测应使用确认后的模型与预算。
+
+### 12.2 五题开发集试测、可重评评分器（2026-09-24）
+
+另一兼容网关上的 `qwen3.8-max` 与 `qwen3.8-flash` 各在 Q01/Q02/Q04/Q05/Q10 上运行过一次基线和一次 Agent。Max Agent 原报告暴露评分器假阴性：Q04 列顺序、显示精度与金标不同但值一致；Q05 提供原始分子分母，由回答计算百分比。`eval/scoring.py` 对可判定的列排列允许重排，保留精度容差；分子分母或额外行只能升级为 `needs_review`，不自动算 pass。`eval/review.py` 能从 EventStore 读取已保存 Trace 重新评分，保留原延迟；人工决定导入必须填写 trial 标识、审核人、pass/fail 和具体理由。
+
+旧版评分器把 Max Agent 的五条 Trace 重评为 2 pass、0 fail、3 needs_review，5/5 Trace 检查通过。两条自动 pass 仅证明 SQL 查询值匹配；新版将 SQL 匹配的任务状态也列为 `needs_review`，等待核对最终文字。五题暂无人工任务完成判定；Flash 仍是旧评分器的初始报告，不能据此做同口径准确率对比。`model_failed` 事件也记录流截断等失败时已产生的 token 用量，避免失败 trial 从成本统计中消失。`qwen3.8-max-0902` 的 Q01 单轮基线探针通过，实际模型名与请求一致。正式结果要在固定模型版本和评分器后运行留出集，再完成文字 rubric；本节数字不能作为简历中的整体性能结论。
+
+### 12.3 逐 trial 检查点（2026-09-24）
+
+`eval/runner.py` 的 `TrialJournal` 为长批次写追加 JSONL：实验元数据头固定题集与重复序号、模型和配置哈希、数据文件身份及 Agent 预算/Trace 路径；每完成一个 trial 即写 score，基线还写 prediction，然后刷盘。`baseline|agent --checkpoint` 新建日志，`--resume` 仅在元数据完全一致时读取已有 trial 并继续；Agent 恢复时还验证对应 Trace 存在。单 trial 在写入前中断可能留下孤立 Trace，恢复会重新运行它。该机制保障评测批次进度，不等于运行中模型请求的自动故障恢复。

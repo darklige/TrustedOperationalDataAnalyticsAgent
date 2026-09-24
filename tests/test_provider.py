@@ -43,7 +43,7 @@ class FakeResponses:
                              "status": "completed"},
                 })
             yield SimpleNamespace(type="response.completed", response=SimpleNamespace(
-                id="resp1", output=[Dumpable({"type": "function_call", "call_id": "c1",
+                id="resp1", model="test-model", output=[Dumpable({"type": "function_call", "call_id": "c1",
                                                "name": "run_sql",
                                                "arguments": '{"sql":"SELECT 1"}'})],
                 usage=Dumpable({"total_tokens": 12})))

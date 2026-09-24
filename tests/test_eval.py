@@ -80,16 +80,44 @@ def test_result_grader_accepts_row_reordering_and_extra_column():
     assert service.calls == [("SELECT ...", 1000)]
 
 
+def test_result_grader_accepts_reordered_columns_and_display_rounding():
+    gold = EvalCase("T03", "time_filter", "compare", "SELECT ...",
+                    [["2025-01", 41.11, 20587], ["2025-02", 43.37, 16519]],
+                    None, ())
+    service = FakeQueryService([[20587, 41.113284, "2025-01"],
+                                [16519, 43.370081, "2025-02"]])
+    assert score_prediction(gold, "SELECT ...", service) == (True, [])
+
+
+def test_denominator_components_require_review_not_automatic_pass():
+    gold = EvalCase("T04", "denominator", "credit share", "SELECT ...",
+                    [["2025-01", 86.53, 2794953]], None, ())
+    service = FakeQueryService([["2025-01", 2794953, 2418413]])
+    correct, notes = score_prediction(gold, "SELECT ...", service)
+    assert correct is None
+    assert "numerator and denominator" in notes[0]
+
+
 def test_result_grader_rejects_wrong_count_and_failed_sql():
     service = FakeQueryService([["2025-01", 10], ["2025-02", 11]])
     assert score_prediction(case(), "SELECT ...", service)[0] is False
     assert score_prediction(case(), "BAD", service)[0] is False
 
 
+def test_extra_rows_with_gold_prefix_require_review_instead_of_auto_pass():
+    service = FakeQueryService([["2025-01", 10], ["2025-02", 12], ["2025-03", 9]])
+    correct, notes = score_prediction(case(), "SELECT ...", service)
+    assert correct is None
+    assert "larger result" in notes[0]
+    scored = score_trace(case(), trace(), service)
+    assert scored.status == "needs_review"
+    assert scored.sql_correct is None
+
+
 def test_trace_causality_and_evidence():
     service = FakeQueryService([["2025-01", 10], ["2025-02", 12]])
     scored = score_trace(case(), trace(), service)
-    assert scored.status == "pass"
+    assert scored.status == "needs_review"
     assert scored.input_tokens == 30 and scored.output_tokens == 10
     assert scored.tool_calls == 1
     uncited = score_trace(case(), trace(answer="January without a source"), service)
@@ -129,7 +157,7 @@ async def test_single_turn_baseline_and_repeats():
     provider = FakeProvider(json.dumps({"sql": "SELECT ...", "answer": "10 and 12"}))
     service = FakeQueryService([["2025-01", 10], ["2025-02", 12]])
     score, prediction = await run_single_turn_baseline(case(), provider, service)
-    assert score.status == "pass"
+    assert score.status == "needs_review"
     assert prediction["sql"] == "SELECT ..."
     assert score.input_tokens == 30
     scores, predictions = await run_baseline_trials([case()], provider, service, repeats=3)
@@ -172,7 +200,7 @@ async def test_agent_trials_repeat_and_use_persisted_trace():
                                     repeats=2)
     assert runner.calls == 2
     assert [item.run_id for item in scores] == ["run-1", "run-2"]
-    assert all(item.status == "pass" for item in scores)
+    assert all(item.status == "needs_review" for item in scores)
     assert all(item.latency_ms is not None for item in scores)
 
 
