@@ -162,6 +162,57 @@ def test_large_tool_result_keeps_evidence_id_in_model_view():
     assert len(json.dumps(view)) < 6_000
 
 
+@pytest.mark.parametrize("answer", [
+    "无法核实。但共有 3051046 条行程。",
+    "无法核实，订单上涨了 3.05%。",
+    "无法核实。收入约 305 万元。",
+    "无法核实，但共有三百万条行程。",
+    "无法核实，但增长百分之三十。",
+    "请澄清口径；该月为 86.5%。",
+])
+def test_abstention_cannot_launder_numeric_claim_without_query(answer):
+    assert not AgentRunner._answer_has_evidence(answer, [])
+
+
+@pytest.mark.parametrize("answer", [
+    "无法核实该结果。",
+    "无法核实 2025-03 的数据，因为当前数据集未覆盖该月份。",
+    "无法核实 2025 年 3 月的数据；请补充该月份的来源。",
+])
+def test_pure_abstention_without_query_is_allowed(answer):
+    assert AgentRunner._answer_has_evidence(answer, [])
+
+
+class UnsupportedThenRefusalProvider:
+    def __init__(self):
+        self.turns = 0
+
+    async def summarize(self, items):
+        return "summary"
+
+    async def stream(self, messages, tools, instructions):
+        self.turns += 1
+        answer = ("无法核实，但共有 3 条行程。" if self.turns == 1 else
+                  "无法核实该结果，请补充数据来源。")
+        yield ProviderEvent("text_delta", {"text": answer})
+        yield ProviderEvent("completed", {"output": [{"type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": answer}]}], "usage": {}})
+
+
+@pytest.mark.asyncio
+async def test_numeric_abstention_is_rejected_then_pure_refusal_completes(tmp_path):
+    query = FakeQuery()
+    store = EventStore(tmp_path / "state.db")
+    provider = UnsupportedThenRefusalProvider()
+    runner = AgentRunner(provider, ToolRegistry(query, tmp_path), store)
+    state = await runner.run("有多少条行程？")
+    assert state.status == "completed"
+    assert state.turn == 2
+    assert state.answer == "无法核实该结果，请补充数据来源。"
+    assert query.calls == []
+    assert [event["kind"] for event in store.events(state.run_id)].count("answer_rejected") == 1
+
+
 class TokenHeavyProvider:
     async def summarize(self, items):
         return "summary"

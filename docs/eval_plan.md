@@ -78,7 +78,7 @@ python -m trust_agent.eval agent \
   --out work/agent_report.json
 ```
 
-每次 trial 使用独立 run ID，完整事件写入 `--state-db`；报告中的 run ID 可回查 Trace。`--limit` 适合先做小规模冒烟验证。要运行扩展开发集，改用 `--cases evals/dev_cases.jsonl`；冻结调参后用 `--cases evals/heldout_cases.jsonl` 单独运行留出集。目前已完成五道开发题模型筛选和首批 12 题基线、Agent 各三次重复；72 题开发集评测进行中，不能把金标校验或 SQL oracle 命中当作 Agent 任务完成率。
+每次 trial 使用独立 run ID，完整事件写入 `--state-db`；报告中的 run ID 可回查 Trace。`--limit` 适合先做小规模冒烟验证。要运行扩展开发集，改用 `--cases evals/dev_cases.jsonl`；冻结调参后用 `--cases evals/heldout_cases.jsonl` 单独运行留出集。首批 12 题基线、Agent 各三次重复属于旧版运行时的开发诊断；随后发现运行时与题意问题，旧 72 题开发集试跑已中止，新版评测待执行。不能把金标校验或 SQL oracle 命中当作 Agent 任务完成率。
 
 较长的评测可用 `--checkpoint runtime/agent_eval.jsonl`，若中断则保持完全相同的参数、环境模型设置与 `--state-db`，再加 `--resume`。基线命令也支持这两个选项，并建议同时设置 `--predictions-out`，使预测可在后续无模型重评。检查点首行存调用元数据，后续每完成一条 trial 就写入评分（基线还保存预测）并刷盘；续跑仅跳过已有记录。续跑会校验题集 SHA、case/trial 顺序、请求模型、provider 与非密钥设置哈希、数据文件路径/大小/修改时间、Agent 预算和 Trace 数据库路径；损坏行、重复 trial 或缺失 Agent Trace 会报错，避免静默混合不同实验。检查点不保存密钥。一次试验若在写入检查点前中断，可能留下孤立 Trace，续跑会重新运行该 trial，不把孤立 Trace 算作完成。
 

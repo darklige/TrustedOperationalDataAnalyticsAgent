@@ -32,6 +32,7 @@ class ChatCompletionsProvider:
             "model": self.model,
             "messages": self.to_chat_messages(messages, instructions),
             "stream": True,
+            "stream_options": {"include_usage": True},
             "max_tokens": self.max_output_tokens,
         }
         if tools:
@@ -88,6 +89,11 @@ class ChatCompletionsProvider:
         if finish_reason not in {"stop", "tool_calls"}:
             raise ProviderStreamError(
                 f"Chat Completions stream ended with {finish_reason!r}",
+                usage=usage, model=actual_model, response_id=response_id,
+            )
+        if int(usage.get("total_tokens") or 0) <= 0:
+            raise ProviderStreamError(
+                "Chat Completions stream did not report token usage",
                 usage=usage, model=actual_model, response_id=response_id,
             )
         if calls and not tools:

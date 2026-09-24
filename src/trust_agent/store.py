@@ -38,6 +38,17 @@ class EventStore:
                     source_run_id TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS scoped_memories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_run_id TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(source_run_id, content)
+                );
+                CREATE INDEX IF NOT EXISTS scoped_memories_run_id
+                    ON scoped_memories(source_run_id, id);
+                INSERT OR IGNORE INTO scoped_memories(source_run_id, content, created_at)
+                    SELECT source_run_id, content, created_at FROM memories;
                 """
             )
 
@@ -92,6 +103,10 @@ class EventStore:
             kind, data = event["kind"], event["data"]
             if kind == "run_started":
                 state.history.append({"role": "user", "content": data["question"]})
+                state.status = "running"
+                state.answer = ""
+            elif kind == "run_resumed":
+                state.status = "running"
             elif kind == "model_completed":
                 output = data["output"]
                 state.history.extend(output)
@@ -102,12 +117,15 @@ class EventStore:
                 views = {e["data"]["call_id"]: e["data"]["output"] for e in turn_events
                          if e["kind"] == "tool_result_view"}
                 for item in output:
-                    if item.get("type") == "function_call" and item.get("call_id") in results:
+                    if item.get("type") == "function_call" and (
+                            item.get("call_id") in results or item.get("call_id") in views):
                         state.history.append({"type": "function_call_output",
                                               "call_id": item["call_id"],
-                                              "output": views.get(item["call_id"]) or
-                                              json.dumps(results[item["call_id"]],
-                                                         ensure_ascii=False, default=str)[:6_000]})
+                                              "output": (views[item["call_id"]]
+                                                         if item["call_id"] in views else
+                                                         json.dumps(results[item["call_id"]],
+                                                                    ensure_ascii=False,
+                                                                    default=str)[:6_000])})
             elif kind == "answer_rejected":
                 state.history.append({"role": "developer", "content":
                     "Final answer lacked verifiable query evidence; cite query_id."})
@@ -128,13 +146,20 @@ class EventStore:
     def add_memory(self, content: str, source_run_id: str) -> None:
         with self._connect() as db:
             db.execute(
-                "INSERT OR IGNORE INTO memories(content,source_run_id,created_at) VALUES(?,?,?)",
-                (content, source_run_id, _now()),
+                "INSERT OR IGNORE INTO scoped_memories(source_run_id,content,created_at) "
+                "VALUES(?,?,?)",
+                (source_run_id, content, _now()),
             )
 
-    def memories(self, limit: int = 10) -> list[str]:
+    def memories(self, limit: int = 10, source_run_id: str | None = None) -> list[str]:
         with self._connect() as db:
-            rows = db.execute("SELECT content FROM memories ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            if source_run_id is None:
+                rows = db.execute("SELECT content FROM scoped_memories ORDER BY id DESC LIMIT ?",
+                                  (limit,)).fetchall()
+            else:
+                rows = db.execute("SELECT content FROM scoped_memories "
+                                  "WHERE source_run_id=? ORDER BY id DESC LIMIT ?",
+                                  (source_run_id, limit)).fetchall()
         return [r[0] for r in rows]
 
 

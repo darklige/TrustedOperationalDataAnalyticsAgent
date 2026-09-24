@@ -61,6 +61,7 @@ async def test_chat_stream_assembles_multiple_tool_calls_before_dispatch():
     assert events[-1].data["model"] == "observed-model"
     assert fake.request["tools"][0]["function"]["name"] == "get_metric"
     assert "name" not in fake.request["tools"][0]
+    assert fake.request["stream_options"] == {"include_usage": True}
 
 
 @pytest.mark.asyncio
@@ -108,3 +109,21 @@ def test_orphan_tool_result_is_rejected():
         ChatCompletionsProvider.to_chat_messages([
             {"type": "function_call_output", "call_id": "missing", "output": "{}"},
         ], "rules")
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_without_usage_fails_before_tool_dispatch():
+    fake = FakeChat([
+        chunk({"tool_calls": [{"index": 0, "id": "c1", "function": {
+            "name": "run_sql", "arguments": '{"sql":"SELECT 1"}'}}]}),
+        chunk({}, finish="tool_calls"),
+    ])
+    provider = ChatCompletionsProvider("alias", api_key="test-key", base_url="https://example.com/v1")
+    provider.client = SimpleNamespace(chat=SimpleNamespace(completions=fake))
+    tool = {"type": "function", "name": "run_sql", "description": "query",
+            "parameters": {"type": "object", "properties": {}}}
+    events = []
+    with pytest.raises(ProviderStreamError, match="token usage"):
+        async for event in provider.stream([], [tool], "system"):
+            events.append(event)
+    assert not any(event.kind == "tool_ready" for event in events)

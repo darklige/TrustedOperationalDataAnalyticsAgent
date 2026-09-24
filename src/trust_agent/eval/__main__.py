@@ -26,6 +26,24 @@ def _save_json(path: str | None, payload: Any) -> None:
     print(rendered)
 
 
+def _source_sha256(source_root: Path | None = None) -> str:
+    """Fingerprint package Python sources independently of filesystem metadata.
+
+    Include relative filenames as well as bytes, so adding, deleting, renaming,
+    or editing a source file invalidates an in-progress trial journal.
+    """
+    root = source_root or Path(__file__).resolve().parents[1]
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*.py"), key=lambda item: item.relative_to(root).as_posix()):
+        relative_name = path.relative_to(root).as_posix().encode("utf-8")
+        contents = path.read_bytes()
+        digest.update(len(relative_name).to_bytes(8, "big"))
+        digest.update(relative_name)
+        digest.update(len(contents).to_bytes(8, "big"))
+        digest.update(contents)
+    return digest.hexdigest()
+
+
 def _trial_journal(args: argparse.Namespace, cases: list[Any], provider: Any,
                    *, mode: str) -> TrialJournal | None:
     if args.resume and not args.checkpoint:
@@ -41,7 +59,7 @@ def _trial_journal(args: argparse.Namespace, cases: list[Any], provider: Any,
         "TRUST_AGENT_CHAT_EXTRA_BODY": os.getenv("TRUST_AGENT_CHAT_EXTRA_BODY", ""),
     }
     metadata = {
-        "version": 1,
+        "version": 2,
         "mode": mode,
         "model_requested": args.model,
         "provider": type(provider).__name__,
@@ -50,6 +68,7 @@ def _trial_journal(args: argparse.Namespace, cases: list[Any], provider: Any,
         "provider_settings_sha256": hashlib.sha256(json.dumps(
             provider_settings, sort_keys=True).encode()).hexdigest(),
         "suite_sha256": hashlib.sha256(Path(args.cases).read_bytes()).hexdigest(),
+        "source_sha256": _source_sha256(),
         "trial_keys": [{"case_id": case.id, "trial": trial}
                        for case in cases for trial in range(1, args.repeats + 1)],
         "db": {"path": str(db_path), "size": db_stat.st_size,
@@ -193,6 +212,7 @@ async def _run_baseline(args: argparse.Namespace) -> None:
                           "generation_settings": _generation_settings(),
                           "suite": Path(args.cases).name,
                           "suite_sha256": hashlib.sha256(Path(args.cases).read_bytes()).hexdigest(),
+                          "source_sha256": _source_sha256(),
                           "trials": [score.to_dict() for score in scores],
                           "summary": summarize_trials(scores)})
 
@@ -237,6 +257,7 @@ async def _run_agent(args: argparse.Namespace) -> None:
                           "generation_settings": _generation_settings(),
                           "suite": Path(args.cases).name,
                           "suite_sha256": hashlib.sha256(Path(args.cases).read_bytes()).hexdigest(),
+                          "source_sha256": _source_sha256(),
                           "suite_size": len(cases),
                           "budgets": {"max_turns": args.max_turns,
                                       "max_tool_calls": args.max_tool_calls,

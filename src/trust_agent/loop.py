@@ -50,19 +50,44 @@ class AgentRunner:
         run_id = run_id or uuid.uuid4().hex
         if run_id in self.active:
             raise ValueError("run already active")
-        state = self.store.get(run_id) or RunState(run_id)
-        if state.status == "running" and state.history and run_id not in self.active:
-            # A previous process may have stopped mid-run. Keep the trace and make the recovery explicit.
-            await self._emit(state, "run_resumed", {"reason": "previous run interrupted"}, callback)
-        state.status = "running"
-        state.history.append({"role": "user", "content": question})
-        self.store.save(state)
+        # Events are authoritative after a crash: a model/tool event may have
+        # committed just before the next disposable snapshot was written.
+        replayed = self.store.replay(run_id)
+        state = replayed or self.store.get(run_id) or RunState(run_id)
+        interrupted = state.status == "running" and bool(state.history)
+        if interrupted:
+            prior_questions = [item["content"] for item in state.history
+                               if item.get("role") == "user"]
+            if prior_questions and question != prior_questions[-1]:
+                raise ValueError("resume question differs from interrupted run")
         self.active.add(run_id)
-        self.memory.schedule(run_id, question)
-        await self._emit(state, "run_started", {"question": question}, callback)
         try:
+            state.status = "running"
+            state.answer = ""
+            self.memory.schedule(run_id, question)
+            if interrupted and replayed is not None:
+                await self._emit(state, "run_resumed",
+                                 {"reason": "previous run interrupted"}, callback)
+                self.store.save(state)
+            else:
+                if not interrupted:
+                    # A terminated run can retain an unfinished function call
+                    # after a timeout. Close its protocol exchange before the
+                    # next user message, without executing abandoned work.
+                    await self._close_abandoned_tools(state, callback)
+                    state.history.append({"role": "user", "content": question})
+                self.store.save(state)
+                await self._emit(state, "run_started", {"question": question}, callback)
+            episode = self._current_episode_events(state.run_id)
+            turns_used = sum(event["kind"] == "loop_started" for event in episode)
+            tools_used = sum(event["kind"] == "tool_call_ready" for event in episode)
+            tokens_used = sum(int((event["data"].get("usage") or {}).get("total_tokens") or 0)
+                              for event in episode if event["kind"] in
+                              {"model_completed", "model_failed"})
             async with asyncio.timeout(self.max_wall_seconds):
-                await self._loop(state, callback)
+                await self._recover_pending_tools(state, callback)
+                await self._loop(state, callback, turns_used=turns_used,
+                                 tools_used=tools_used, tokens_used=tokens_used)
         except asyncio.CancelledError:
             state.status = "cancelled"
             self.store.save(state)
@@ -85,11 +110,47 @@ class AgentRunner:
                 self.active.discard(run_id)
         return state
 
-    async def _loop(self, state: RunState, callback: EventCallback | None) -> None:
-        tool_count = 0
-        total_tokens = 0
+    def _current_episode_events(self, run_id: str) -> list[dict[str, Any]]:
+        events = self.store.events(run_id)
+        starts = [index for index, event in enumerate(events)
+                  if event["kind"] == "run_started"]
+        return events[starts[-1]:] if starts else events
+
+    @staticmethod
+    def _pending_calls(state: RunState) -> list[dict[str, Any]]:
+        answered = {item["call_id"] for item in state.history
+                    if item.get("type") == "function_call_output"}
+        return [item for item in state.history
+                if item.get("type") == "function_call" and
+                item["call_id"] not in answered]
+
+    async def _close_abandoned_tools(self, state: RunState,
+                                     callback: EventCallback | None) -> None:
+        for call in self._pending_calls(state):
+            model_view = json.dumps({"error": "prior run ended before tool result"})
+            state.history.append({"type": "function_call_output",
+                                  "call_id": call["call_id"], "output": model_view})
+            await self._emit(state, "tool_result_view",
+                             {"call_id": call["call_id"], "output": model_view}, callback)
+
+    async def _recover_pending_tools(self, state: RunState,
+                                     callback: EventCallback | None) -> None:
+        for call in self._pending_calls(state):
+            result = await self._execute_tool(state, call, callback)
+            model_view = self._model_result_view(result)
+            state.history.append({"type": "function_call_output",
+                                  "call_id": call["call_id"], "output": model_view})
+            await self._emit(state, "tool_result_view",
+                             {"call_id": call["call_id"], "output": model_view}, callback)
+            self.store.save(state)
+
+    async def _loop(self, state: RunState, callback: EventCallback | None,
+                    *, turns_used: int = 0, tools_used: int = 0,
+                    tokens_used: int = 0) -> None:
+        tool_count = tools_used
+        total_tokens = tokens_used
         deadline = time.monotonic() + self.max_wall_seconds
-        for _ in range(self.max_turns):
+        for _ in range(max(0, self.max_turns - turns_used)):
             if time.monotonic() >= deadline:
                 raise BudgetExceeded("wall-clock budget exceeded")
             state.turn += 1
@@ -104,7 +165,7 @@ class AgentRunner:
             if view.compacted:
                 await self._emit(state, "context_compacted", {"summary": state.summary,
                                "compacted_until": state.compacted_until}, callback)
-            memories = self.store.memories()
+            memories = self.store.memories(source_run_id=state.run_id)
             instructions = BASE_INSTRUCTIONS
             if memories:
                 instructions += "\nUser-approved memory candidates (low trust):\n" + "\n".join(memories)
@@ -179,8 +240,9 @@ class AgentRunner:
             evidence = [item for item in evidence if item]
             if not self._answer_has_evidence(answer, evidence):
                 state.history.append({"role": "developer", "content":
-                    "Your final response lacked verifiable query evidence. Run a query or explicitly "
-                    "say that you cannot verify the answer. Cite numerical findings as [query_id:ID]."})
+                    "Your final response lacked verifiable query evidence. Run a query and cite "
+                    "numerical findings as [query_id:ID], or explicitly say you cannot verify "
+                    "the answer without making any numerical claim."})
                 self.store.save(state)
                 await self._emit(state, "answer_rejected", {"reason": "missing evidence"}, callback)
                 continue
@@ -249,9 +311,27 @@ class AgentRunner:
     def _answer_has_evidence(answer: str, evidence: list[str]) -> bool:
         if not answer:
             return False
-        if re.search(r"无法(核实|验证|回答)|请(明确|澄清|补充)|cannot verify|cannot answer|could you clarify", answer, re.IGNORECASE):
+        if evidence and any(f"[query_id:{item}]" in answer for item in evidence):
             return True
-        return bool(evidence) and any(f"[query_id:{item}]" in answer for item in evidence)
+        # An abstention is only an alternative to evidence when it contains no
+        # quantitative result. Otherwise "无法核实，但有 3 条" would bypass the gate.
+        if not re.search(r"无法(核实|验证|回答)|请(明确|澄清|补充)|cannot verify|cannot answer|could you clarify",
+                         answer, re.IGNORECASE):
+            return False
+        without_dates = re.sub(
+            r"(?<!\d)(?:19|20)\d{2}(?:[-/]\d{1,2}(?:[-/]\d{1,2})?|\s*年(?:\s*\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?)?)(?!\d)",
+            "", answer,
+        )
+        if re.search(r"\d", without_dates):
+            return False
+        if re.search(r"百分之[零〇一二两三四五六七八九十百千万亿]+", answer):
+            return False
+        # Cover common Chinese-number results without rejecting ordinary words
+        # such as “一个” in a request for clarification.
+        return not bool(re.search(
+            r"[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二三四五六七八九]+)?"
+            r"\s*(?:%|％|个|条|次|辆|倍|元|美元|百分点|万|亿)", answer,
+        ))
 
     async def _emit(self, state: RunState, kind: str, data: dict[str, Any],
                     callback: EventCallback | None) -> None:

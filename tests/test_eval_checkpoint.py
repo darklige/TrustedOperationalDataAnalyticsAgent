@@ -56,6 +56,47 @@ def test_journal_rejects_mismatched_metadata_duplicate_and_torn_line(tmp_path):
         TrialJournal(path, _metadata(), resume=True)
 
 
+def test_source_fingerprint_tracks_source_bytes_and_names(tmp_path):
+    from trust_agent.eval.__main__ import _source_sha256
+
+    package = tmp_path / "trust_agent"
+    package.mkdir()
+    first = package / "__init__.py"
+    first.write_text("value = 1\n", encoding="utf-8")
+    initial = _source_sha256(package)
+    assert initial == _source_sha256(package)
+    (package / "__pycache__").mkdir()
+    (package / "__pycache__" / "cache.pyc").write_bytes(b"ignored")
+    assert initial == _source_sha256(package)
+    first.write_text("value = 2\n", encoding="utf-8")
+    edited = _source_sha256(package)
+    assert edited != initial
+    first.rename(package / "renamed.py")
+    assert _source_sha256(package) != edited
+    (package / "new.py").write_text("", encoding="utf-8")
+    assert _source_sha256(package) != edited
+
+
+def test_cli_journal_resume_rejects_source_change(tmp_path, monkeypatch):
+    from trust_agent.eval import __main__ as cli
+
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text("case\n", encoding="utf-8")
+    db = tmp_path / "data.duckdb"
+    db.write_bytes(b"database")
+    checkpoint = tmp_path / "trials.jsonl"
+    args = Namespace(resume=False, checkpoint=str(checkpoint), cases=str(cases),
+                     db=str(db), model="pinned-model", repeats=1)
+    monkeypatch.setattr(cli, "_source_sha256", lambda: "source-a")
+    journal = cli._trial_journal(args, [_case()], _Provider(), mode="baseline")
+    assert journal is not None
+    assert journal.metadata["source_sha256"] == "source-a"
+    args.resume = True
+    monkeypatch.setattr(cli, "_source_sha256", lambda: "source-b")
+    with pytest.raises(ValueError, match="metadata differs"):
+        cli._trial_journal(args, [_case()], _Provider(), mode="baseline")
+
+
 def test_journal_rejects_unterminated_final_record(tmp_path):
     path = tmp_path / "checkpoint.jsonl"
     journal = TrialJournal(path, _metadata())

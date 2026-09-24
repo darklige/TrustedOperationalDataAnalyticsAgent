@@ -54,7 +54,7 @@ HTTP 接口：`POST /runs` 传入 `{"question":"..."}`，得到 `run_id`；随�
 
 ## 评测与复现
 
-评测集共 **92 题**：原始 `evals/gold_cases.jsonl` 12 题，加上 `evals/expanded_cases.jsonl` 80 题；`evals/dev_cases.jsonl` 与 `evals/heldout_cases.jsonl` 分别含 72 和 20 题。其中 79 条数值金标已通过生产查询服务复核；13 条行为题需要人工按 rubric 评阅。评测设计见 [docs/eval_plan.md](docs/eval_plan.md)。评测脚本比较查询执行结果、检查 Trace 中的工具/证据行为，并记录重复 trial、延迟和 token 使用量。**目前已完成五题开发集筛选和首批 12 题的基线/Agent 各三次重复；72 题开发集评测进行中，留出集与人工复核尚未完成，不能宣称整体任务完成率或相对基线的提升。**
+评测集共 **92 题**：原始 `evals/gold_cases.jsonl` 12 题，加上 `evals/expanded_cases.jsonl` 80 题；`evals/dev_cases.jsonl` 与 `evals/heldout_cases.jsonl` 分别含 72 和 20 题。其中 79 条数值金标已通过生产查询服务复核；13 条行为题需要人工按 rubric 评阅。评测设计见 [docs/eval_plan.md](docs/eval_plan.md)，[真实模型评测记录](docs/live_eval_report.md)保留冻结配置、分母和调用成本。评测脚本比较查询执行结果、检查 Trace 中的工具/证据行为，并记录重复 trial、延迟和 token 使用量。**首批 12 题的基线/Agent 三次重复是上一版运行时的开发诊断结果；代码审计后修复了证据门禁、恢复和记忆隔离，另修订 23 道开发题题意。新版本 72 题和 20 题留出集评测尚未完成，不能宣称整体任务完成率或相对基线的提升。**
 
 ```bash
 .venv/bin/python -m trust_agent.eval score --cases evals/gold_cases.jsonl \
