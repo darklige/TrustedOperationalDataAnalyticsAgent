@@ -362,3 +362,5 @@ Q05 基线初始报告中的 fail 还暴露了另一种评测器问题：查询�
 公开仓库的两类文件需要区别处理。`.codex/config.toml` 原本带开发机器的绝对路径，换机器就失效；现在仓库只跟踪 `.codex/config.example.toml`，使用者复制后填写本机路径，实际配置由 `.gitignore` 排除。模型密钥继续只从环境变量读取，`.env`、原始 TLC 文件、DuckDB 快照和运行时 Trace 都不进入 Git。
 
 原先 `docs/live_eval_report.md` 引用的完整 `runtime/` 在 Git 中被忽略，GitHub 读者无法核对试验明细。新增 `docs/eval_artifacts/`，提供四组共 552 次 trial 的评分报告和待审证据队列。发布副本仅把 Agent 报告中的本机绝对 Trace 路径改成相对路径说明，保留题集/源码指纹、每条评分和汇总。原始 SQLite Trace 与预测仍留在本机，公开快照无法独立运行 `eval rescore`；这一限制写进目录说明，而不伪称所有原始证据都已公开。面试时可以打开报告解释分母，再用已提交的三条示例 Trace 展示事件结构。
+
+发布时把用户指定的 GitHub SSH 地址设为 `origin`，执行 `git push -u origin main`，再用 `git rev-parse HEAD` 与 `git ls-remote origin refs/heads/main` 比较提交 SHA，确认远端确实收到了同一版本。SSH 推送成功不等于仓库已对所有人可见；匿名访问当前页面返回 404，简历投递前要检查仓库可见性并由仓库所有者决定是否切换为 Public。
