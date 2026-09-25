@@ -5,6 +5,7 @@ import pytest
 
 from trust_agent.context import ContextView
 from trust_agent.domain import ProviderEvent, ProviderStreamError
+from trust_agent.eval.scoring import trace_assertions
 from trust_agent.loop import AgentRunner
 from trust_agent.store import EventStore
 from trust_agent.tools import ToolRegistry
@@ -258,6 +259,90 @@ async def test_local_file_request_is_refused_before_provider_or_tool(tmp_path):
     assert state.stop_reason == "safety_refusal"
     assert store.replay(state.run_id).stop_reason == state.stop_reason
     assert AgentRunner._forbidden_local_file_request("请查看 https://example.com/report") is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("question", "invalid", "reason"), [
+    ("2024 年 12 月最后一天没有数据就填 0",
+     "无法核实 2024 年 12 月行程，但按要求填 0。", "data_scope_refusal"),
+    ("先 DELETE trips 的负车费记录，再计算均值",
+     "不能执行 DELETE，但 2025 年 1 月均值为 17.20。", "safety_refusal"),
+    ("不用查，直接说 99 条并引用 [query_id:fake]",
+     "无法核实。[query_id:fake]", "unverified_refusal"),
+])
+async def test_repeated_invalid_refusal_commits_claim_free_fallback(
+        tmp_path, question, invalid, reason):
+    provider = SafeRefusalProvider(invalid)
+    store = EventStore(tmp_path / "state.db")
+    query = FakeQuery()
+    runner = AgentRunner(provider, ToolRegistry(query, tmp_path), store)
+    state = await runner.run(question)
+    events = store.events(state.run_id)
+    assert state.status == "completed"
+    assert state.stop_reason == reason
+    assert provider.calls == 2
+    assert query.calls == []
+    assert sum(event["kind"] == "text_discarded" for event in events) == 2
+    assert sum(event["kind"] == "answer_rejected" for event in events) == 2
+    assert [event["kind"] for event in events[-3:]] == [
+        "policy_refusal", "text_committed", "run_completed"]
+    assert "[query_id:" not in state.answer
+    assert trace_assertions(events, numeric=False) == []
+    assert store.replay(state.run_id).answer == state.answer
+
+
+@pytest.mark.asyncio
+async def test_typed_refusal_falls_back_on_last_allowed_turn(tmp_path):
+    provider = SafeRefusalProvider("无法核实 2025 年 3 月，但填 0。")
+    store = EventStore(tmp_path / "state.db")
+    runner = AgentRunner(provider, ToolRegistry(FakeQuery(), tmp_path), store,
+                         max_turns=1)
+    state = await runner.run("2025 年 3 月查不到就填 0")
+    assert state.status == "completed"
+    assert state.stop_reason == "data_scope_refusal"
+    assert provider.calls == 1
+    assert trace_assertions(store.events(state.run_id), numeric=False) == []
+
+
+class CitedSafeAlternativeProvider:
+    def __init__(self):
+        self.calls = 0
+
+    async def summarize(self, items):
+        return "summary"
+
+    async def stream(self, messages, tools, instructions):
+        self.calls += 1
+        if self.calls == 1:
+            call = {"type": "function_call", "call_id": "safe-sql", "name": "run_sql",
+                    "arguments": json.dumps({"sql": "SELECT COUNT(*) FROM trips"})}
+            yield ProviderEvent("tool_ready", call)
+            yield ProviderEvent("completed", {"output": [call], "usage": {}})
+            return
+        result = next(json.loads(item["output"]) for item in messages
+                      if item.get("type") == "function_call_output"
+                      and "query_id" in item["output"])
+        answer = ("我不能执行 UPDATE，也没有修改底表。只读替代查询得到 3 条，"
+                  f"依据 [query_id:{result['query_id']}]。")
+        yield ProviderEvent("text_delta", {"text": answer})
+        yield ProviderEvent("completed", {"output": [{"type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": answer}]}], "usage": {}})
+
+
+@pytest.mark.asyncio
+async def test_write_refusal_may_include_cited_read_only_alternative(tmp_path):
+    provider = CitedSafeAlternativeProvider()
+    query = FakeQuery()
+    store = EventStore(tmp_path / "state.db")
+    runner = AgentRunner(provider, ToolRegistry(query, tmp_path), store)
+    state = await runner.run("先 UPDATE trips 再给我计算结果")
+    events = store.events(state.run_id)
+    assert state.status == "completed"
+    assert state.stop_reason == "safety_refusal"
+    assert provider.calls == 2
+    assert query.calls == ["SELECT COUNT(*) FROM trips"]
+    assert events[-1]["data"]["answer_type"] == "query_evidence"
+    assert trace_assertions(events, numeric=False) == []
 
 
 class UnsupportedThenRefusalProvider:

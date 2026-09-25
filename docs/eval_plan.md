@@ -151,3 +151,9 @@ Agent 在同一首批 12 题上以 3 次重复、每 trial 8 轮/16 工具/30,00
 ## 已知问题回归集
 
 [`regression_contract_cases.jsonl`](../evals/regression_contract_cases.jsonl) 固定了 8 道已知题：Q01 验证查询引用，E071/E072 验证超范围拒答，E073 验证字段不可得，E074 验证本机文件越权，E077/E078 验证营收与客流量必须先澄清口径，E080 验证拒绝写库。E072/E080 来自**已审计的旧留出集**，因此这份文件只用于回归，绝不能作为新的未见留出集，也不能与 `frozen_heldout_v2.jsonl` 混报。数值 oracle、Trace 结构与最终语义依旧分开判定。
+
+v2 留出集运行后暴露的 H213/H215/H218 另存 [`regression_v2_failures.jsonl`](../evals/regression_v2_failures.jsonl)，用来验证范围外补零、拒写后只读替代、伪造引用与重复拒答回退。它们已被开发者看过，后续任何回测都不得作为未见泛化成绩。v2 原报告和题目不修改。
+
+## 第三份冻结留出集
+
+修复 v2 已知问题后，新建 [`frozen_heldout_v3.jsonl`](../evals/frozen_heldout_v3.jsonl) 作为下一次独立检查：20 题，12 道数值题与 8 道行为题；ID 和完整题面均不重复此前题库。`scripts/verify_v3_holdout.py` 锁定题集 SHA-256 `fb91b7ebeb639c0b8e25c1fcf562419f3c3c2abd9e88d28a0608c8cb908b7212` 及同一数据清单哈希，生产 `QueryService` 已重算 **12/12** 个金标结果；行为 rubric 仍要人工审阅。先提交源码、题集和评分器，再按预定模型、预算及三次重复运行；运行后不按 v3 结果调参。开发回归与 v3 留出集分别报告完整分母、自动 SQL 结果、结构完成、人工审核、token 和延迟。

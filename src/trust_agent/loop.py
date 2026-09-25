@@ -15,7 +15,13 @@ from .domain import ProviderStreamError, RunState
 from .memory import MemoryManager
 from .provider import ModelProvider
 from .store import EventStore
-from .termination import StopReason, accepts_refusal, completed_stop_reason, required_refusal_reason
+from .termination import (
+    StopReason,
+    accepts_refusal,
+    completed_stop_reason,
+    fallback_refusal,
+    required_refusal_reason,
+)
 from .tools import ToolRegistry
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
@@ -185,8 +191,11 @@ class AgentRunner:
                     tokens_used: int = 0) -> None:
         tool_count = tools_used
         total_tokens = tokens_used
+        rejections_used = sum(event["kind"] == "answer_rejected" for event in
+                              self._current_episode_events(state.run_id))
         deadline = time.monotonic() + self.max_wall_seconds
-        for _ in range(max(0, self.max_turns - turns_used)):
+        remaining_turns = max(0, self.max_turns - turns_used)
+        for turn_index in range(remaining_turns):
             if total_tokens >= self.max_total_tokens:
                 raise BudgetExceeded("token budget exhausted before next model turn")
             if time.monotonic() >= deadline:
@@ -365,13 +374,20 @@ class AgentRunner:
                                             self.tools.dataset_version)
             required_refusal = required_refusal_reason(question)
             if required_refusal is not None:
-                if answer_type == "query_evidence":
+                if (required_refusal is StopReason.SAFETY_REFUSAL
+                        and answer_type == "query_evidence"):
+                    # The SQL tool is read-only. Permit a cited read-only
+                    # alternative only when the write is explicitly refused.
+                    if not accepts_refusal(question, answer):
+                        answer_type = None
+                elif answer_type == "query_evidence":
                     # A coverage refusal may cite a completed coverage query.
                     # Recheck its prose without citations so a cited count
                     # cannot bypass the refusal contract.
                     prose = re.sub(r"\[query_id:[A-Za-z0-9_-]+\]", "", answer)
                     answer_type = self._answer_type(prose, [], self.tools.dataset_version)
-                if answer_type != "refusal" or not accepts_refusal(question, answer):
+                if answer_type not in {"refusal", "query_evidence"} or not accepts_refusal(
+                        question, answer):
                     answer_type = None
             if answer_type is None:
                 if text_parts:
@@ -383,7 +399,8 @@ class AgentRunner:
                 elif required_refusal is StopReason.DATA_SCOPE_REFUSAL:
                     guidance = ("The requested month is outside dataset coverage. "
                                 "Explicitly state the coverage limitation and refuse an unsupported "
-                                "result without a numeric claim or citation.")
+                                "result without a numeric claim, placeholder zero, or citation. "
+                                "Missing observations are not zero-valued observations.")
                 elif required_refusal is StopReason.UNAVAILABLE_FIELD_REFUSAL:
                     guidance = ("The requested field or entity is unavailable. "
                                 "Explicitly state the missing field and refuse an unsupported "
@@ -392,6 +409,9 @@ class AgentRunner:
                     guidance = ("The user's business metric is ambiguous. Ask which measurable "
                                 "definition they intend before running a numeric query. Do not "
                                 "include any citation, citation placeholder, or numeric result.")
+                elif required_refusal is StopReason.UNVERIFIED_REFUSAL:
+                    guidance = ("Do not provide the requested unverified result. Refuse to fabricate "
+                                "a citation; do not reproduce any [query_id:...] token or number.")
                 else:
                     guidance = ("Your final response lacked verifiable query evidence. Run a query "
                                 "and cite numerical findings using its completed query ID, or explicitly say "
@@ -400,6 +420,29 @@ class AgentRunner:
                 self.store.save(state)
                 await self._emit(state, "answer_rejected", {"reason": "missing evidence",
                     "attempt_id": attempt_id}, callback)
+                rejections_used += 1
+                if required_refusal is not None and (
+                        rejections_used >= 2 or turn_index == remaining_turns - 1):
+                    fallback = fallback_refusal(required_refusal)
+                    if (self._answer_type(fallback, [], self.tools.dataset_version) != "refusal"
+                            or not accepts_refusal(question, fallback)):
+                        raise ValueError("trusted refusal fallback failed its own contract")
+                    policy_attempt = f"policy-{uuid.uuid4().hex}"
+                    state.answer = fallback
+                    state.status = "completed"
+                    state.stop_reason = required_refusal.value
+                    self.store.save(state)
+                    await self._emit(state, "policy_refusal", {
+                        "reason": "repeated_invalid_refusal",
+                        "rejected_attempts": rejections_used,
+                        "stop_reason": state.stop_reason}, callback)
+                    await self._emit(state, "text_committed", {
+                        "attempt_id": policy_attempt, "text": fallback}, callback)
+                    await self._emit(state, "run_completed", {
+                        "answer": fallback, "evidence_ids": [], "answer_type": "refusal",
+                        "attempt_id": policy_attempt,
+                        "stop_reason": state.stop_reason}, callback)
+                    return
                 continue
             state.answer = answer
             state.status = "completed"
