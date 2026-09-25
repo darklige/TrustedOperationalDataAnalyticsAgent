@@ -163,3 +163,25 @@ v2 留出集运行后暴露的 H213/H215/H218 另存 [`regression_v2_failures.js
 v3 的 H317/H320 复制到 [`regression_v3_failures.jsonl`](../evals/regression_v3_failures.jsonl)，用于验证缺少司机身份字段、现金纸币小费不可观测及拒答收敛；它们不再具有留出资格。当前问题边界还规定每个新用户问题需要新的 `run_sql` 结果，旧 query ID 仅保留为历史 Trace，不能为下一问题的数值结论背书。
 
 [`frozen_heldout_v4.jsonl`](../evals/frozen_heldout_v4.jsonl) 含 H401–H420，12 道数值题与 8 道行为题。题集 SHA-256 为 `820519222ac9ba3eb871bc12a28f50302d6ebfb4b3ec90636d00f8b4d414afd2`；数据清单 SHA-256 仍为 `48fbd0a206fe5f9a9b3fe756f1d739dd805b01985526e958c9e5a4897620225d`。`.venv/bin/python scripts/verify_v4_holdout.py` 已核对 ID、重复题面、数据快照及 **12/12** 个生产查询金标。H414/H417 仅在题面里声称存在上一轮授权或结果，当前逐题评测不建立真实多轮会话；其结果只能解释为伪造上下文防护样本。代码、评分器、题集在模型运行前一并提交；运行时 Agent 与同版本单轮基线各 20 题×3 次，保留失败和待审分母，报告通过原 Trace/预测无模型重评。运行后不根据 v4 结果调本版规则。
+
+### 接口恢复后的 v4 执行命令
+
+先在当前 shell 设置可用的 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`TRUST_AGENT_PROVIDER=chat_completions`、`TRUST_AGENT_CHAT_EXTRA_BODY='{"enable_thinking":false}'` 和 `TRUST_AGENT_MAX_OUTPUT_TOKENS=2048`，不要把密钥写进仓库文件或命令记录。原定型号为 `qwen3.8-max-0902`；若只能使用另一型号，应记录实际返回名、另起报告文件名，并与 v3 的阿里网关型号分开解释。运行前确认 `git rev-parse HEAD` 为本版冻结提交且工作区无源代码改动，再执行：
+
+```bash
+.venv/bin/python scripts/verify_v4_holdout.py
+.venv/bin/python -m trust_agent.eval agent \
+  --model qwen3.8-max-0902 --cases evals/frozen_heldout_v4.jsonl \
+  --db data/nyc_taxi.duckdb --repeats 3 \
+  --max-turns 8 --max-tool-calls 16 --max-total-tokens 30000 \
+  --max-wall-seconds 120 --state-db runtime/v4_agent.sqlite3 \
+  --checkpoint runtime/v4_agent.checkpoint.jsonl --out runtime/v4_agent_report.json
+.venv/bin/python -m trust_agent.eval baseline \
+  --model qwen3.8-max-0902 --cases evals/frozen_heldout_v4.jsonl \
+  --db data/nyc_taxi.duckdb --repeats 3 \
+  --predictions-out runtime/v4_baseline_predictions.jsonl \
+  --checkpoint runtime/v4_baseline.checkpoint.jsonl \
+  --out runtime/v4_baseline_report.json
+```
+
+中断后只在配置、题集、源码、数据库与检查点仍一致时给原命令加 `--resume`。完成后分别用 `eval rescore --state-db runtime/v4_agent.sqlite3` 和 `eval rescore --predictions runtime/v4_baseline_predictions.jsonl` 从原证据复算，再导出 `needs_review` 队列供独立人工签署。网关 403/限额失败须单列故障批次，不与有效模型成绩合并。
