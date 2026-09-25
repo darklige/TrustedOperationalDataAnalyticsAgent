@@ -91,6 +91,23 @@ async def test_loop_tools_evidence_and_replay(tmp_path):
         "有多少条行程？", "再确认一次"]
 
 
+@pytest.mark.asyncio
+async def test_terminal_callback_failure_does_not_reverse_durable_answer(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    runner = AgentRunner(ScriptedProvider(), ToolRegistry(FakeQuery(), tmp_path), store)
+
+    async def callback(event):
+        if event["kind"] == "text_committed":
+            raise RuntimeError("subscriber disconnected")
+
+    state = await runner.run("有多少条行程？", callback=callback)
+    events = store.events(state.run_id)
+    assert state.status == "completed"
+    assert events[-2]["kind"] == "text_committed"
+    assert events[-1]["kind"] == "run_completed"
+    assert store.replay(state.run_id).answer == state.answer
+
+
 class IncompleteProvider:
     async def summarize(self, items):
         return "summary"

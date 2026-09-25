@@ -81,6 +81,22 @@ class EventStore:
         return {"seq": seq, "run_id": run_id, "turn": turn, "kind": kind, "data": data,
                 "created_at": created_at}
 
+    def append_many(self, run_id: str, turn: int,
+                    items: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+        """Persist related events in one transaction before notifying clients."""
+        saved = []
+        with self._connect() as db:
+            for kind, data in items:
+                created_at = _now()
+                cursor = db.execute(
+                    "INSERT INTO events(run_id,turn,kind,data_json,created_at) VALUES(?,?,?,?,?)",
+                    (run_id, turn, kind, json.dumps(data, ensure_ascii=False, default=str),
+                     created_at),
+                )
+                saved.append({"seq": cursor.lastrowid, "run_id": run_id, "turn": turn,
+                              "kind": kind, "data": data, "created_at": created_at})
+        return saved
+
     def events(self, run_id: str, after: int = 0) -> list[dict[str, Any]]:
         with self._connect() as db:
             rows = db.execute(
@@ -134,6 +150,12 @@ class EventStore:
             elif kind == "context_compacted":
                 state.summary = data["summary"]
                 state.compacted_until = data["compacted_until"]
+            elif kind == "text_committed":
+                # Legacy traces could crash after the visible commit and before
+                # run_completed. The new writer persists both in one transaction.
+                state.answer = data["text"]
+                state.status = "completed"
+                state.stop_reason = data.get("stop_reason")
             elif kind == "run_completed":
                 state.answer = data["answer"]
                 state.status = "completed"

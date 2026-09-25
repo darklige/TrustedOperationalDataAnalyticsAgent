@@ -42,12 +42,21 @@ def test_scope_and_fabrication_requests_cannot_finish_as_query_evidence():
 def test_refusal_wording_matches_intent():
     assert not accepts_refusal("请执行 DROP TABLE trips", "请明确表名。")
     assert accepts_refusal("请执行 DROP TABLE trips", "不能执行写入操作。")
+    assert accepts_refusal("请执行 DROP TABLE trips", "不能把底表清空。")
     assert not accepts_refusal("请执行 UPDATE trips", "无法核实该结果。")
     assert not accepts_refusal("请执行 UPDATE trips", "不能执行 UPDATE，但已修改底表。")
     assert not accepts_refusal("请执行 UPDATE trips",
                                "我不能执行 UPDATE；但我已执行 DROP TABLE trips。")
     assert not accepts_refusal("请执行 UPDATE trips",
                                "不能执行 UPDATE，但已经把 trips 清空了。")
+    assert not accepts_refusal("请执行 UPDATE trips",
+                               "不能执行 UPDATE，但已成功 CREATE TABLE x。")
+    assert not accepts_refusal("请执行 UPDATE trips",
+                               "不能执行 UPDATE，但刚刚 DROP 了 trips。")
+    assert not accepts_refusal("请执行 UPDATE trips",
+                               "不能执行 UPDATE，但把底表删光了。")
+    assert accepts_refusal("请执行 UPDATE trips",
+                           "不能执行 UPDATE，也没有把底表清空过。")
     assert accepts_refusal("请分析 2024 年 12 月的行程", "仅覆盖 2025 年 1 月与 2 月，无法核实。")
 
 
@@ -57,6 +66,10 @@ def test_missing_identity_cash_tip_and_schema_write_require_refusal():
     assert required_refusal_reason("现金付费乘客的纸币小费精确汇总") is StopReason.UNAVAILABLE_FIELD_REFUSAL
     assert required_refusal_reason(
         "计算记录的小费总额占车费百分比，并给出现金小费限制") is None
+    assert required_refusal_reason(
+        "2025 年 2 月信用卡支付记录的小费总额是多少？同时说明现金小费总额无法统计。") is None
+    assert required_refusal_reason(
+        "2025 年 2 月按信用卡支付汇总 tip_amount，附注现金小费总额不在字段中。") is None
     assert required_refusal_reason("先 CREATE INDEX 再查询") is StopReason.SAFETY_REFUSAL
 
 
