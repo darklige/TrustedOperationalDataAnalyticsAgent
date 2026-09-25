@@ -99,6 +99,8 @@ Flash 尚未按相同评分器重评，不能据此比较两模型整体效果�
 
 模型冒烟验证先使用 `gold_cases.jsonl`，调试使用 `dev_cases.jsonl`。旧 `heldout_cases.jsonl` 已用于失败审计，只保留历史报告；本轮改动以新增的 `frozen_heldout_v2.jsonl` 作未见留出集，题集和数据快照可用 `.venv/bin/python scripts/verify_new_holdout.py` 核验。E020 历史金标歧义记录在 `evals/known_ambiguities_v1.json`，评分时显式传入 `--ambiguities` 后，匹配替代口径只会进入人工复核。
 
+新留出集在源码提交 `6543890` 后完成：20 题各 3 次，Agent 52/60 次形成合格完成 Trace；36 次数值题 SQL 为 17 直接匹配、0 不匹配、19 待审。单轮基线有效重跑的对应结果为 20/11/5；首次基线因网关连接错误作废并保留故障报告。Agent 的 8 次未完成集中在三道行为题，提示安全拒答仍可能反复被门禁拒绝至轮次耗尽。两组最终文字均未人工审核，**不能报告任务完成率或整体准确率**。分母、token、延迟、故障处理及逐 trial 证据见 [真实模型评测记录](docs/live_eval_report.md) 与 [公开评测快照](docs/eval_artifacts/README.md)。
+
 `evals/regression_contract_cases.jsonl` 收集已知的引用、范围、安全和业务口径回归题，其中 E072/E080 是已审计的旧留出题；它只用于开发回归。运行命令把上例 `--cases` 改为该文件并保持 `--repeats 1`，结果不得称为新留出集成绩。
 
 MCP 的真实 stdio 测试和项目级 Codex 配置见 [docs/mcp_setup.md](docs/mcp_setup.md)。官方只读文档 MCP 可用于开发查询规范；项目 MCP 只暴露本地受控工具。
