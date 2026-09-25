@@ -8,6 +8,10 @@
 
 安全拒答优先级再次收紧后的最终源码批次单列为 `agent_regression_v2_v14_report.json` 和 `agent_dev_v17_report.json`，各自有同名待审队列。前一段的 v16/初次回归是不同源码指纹的诊断报告，不覆盖也不与最终批次相加；最终源码开发集仍有一条未完成 Trace。原有八题契约集的 24 次统计见 [`live_eval_report.md`](../live_eval_report.md)，本机原 Trace 可重评。
 
+`agent_heldout_v3_report.json`、`baseline_heldout_v3_report.json` 是提交 `7cffd5e` 后的新冻结批次，各 60 次；对应队列分别有 56、54 条待审。`agent_heldout_v3_failures.md` 另记录 4 次结构失败的 Trace 诊断。v3 与旧 v2 是两份不同题集，不能按失败数直接比较改进幅度；报告中的 0 人工 pass 只表示尚无人审阅，正式任务完成率仍为空。
+
+`agent_dev_post_v3_gateway_failure_report.json` 是最新源码开发批次的**供应商故障记录**：72 次中 66 次为 `403 AccessDenied.Unpurchased`，不得拿它的完成率或 SQL `false` 评价模型。`agent_post_v3_nio_smoke_report.json` 与待审队列仅包含另一网关、另一模型的 Q06/H317/H320 三道**已知题**各一次，3/3 次结构完成，Q06 的 SQL 金标匹配；不得与 v3 正式留出集比较。两份公开报告都只将原报告的本机 `trace_store` 绝对路径换成相对说明，原始 Trace 仍在被忽略的 `runtime/`。v4 只有冻结题集与金标验证，当前尚无模型成绩。
+
 `*_review_queue.md` 包含问题、金标或 rubric、模型回答、所引 SQL/结果和空白审核模板。它们是**待审核材料**，不是人工通过记录。当前所有最终文字和行为题尚未由人签署审查；不能从 SQL 匹配推算任务完成率。
 
 本目录不含原始 SQLite Trace、完整检查点、模型原始预测、API 密钥或 194 MB 的 DuckDB 快照。Trace 与预测在本机被忽略的 `runtime/` 中，用于生成和无模型重评上述报告；公开目录不能单独复跑 `eval rescore`。数据源及重建方法见 [`data/README.md`](../../data/README.md)，三条脱敏示例 Trace 见 [`docs/traces/`](../traces/)。未来重新评测时应生成新批次和新留出题，不覆盖这组冻结结果。

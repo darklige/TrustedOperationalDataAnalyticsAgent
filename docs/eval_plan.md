@@ -156,4 +156,10 @@ v2 留出集运行后暴露的 H213/H215/H218 另存 [`regression_v2_failures.js
 
 ## 第三份冻结留出集
 
-修复 v2 已知问题后，新建 [`frozen_heldout_v3.jsonl`](../evals/frozen_heldout_v3.jsonl) 作为下一次独立检查：20 题，12 道数值题与 8 道行为题；ID 和完整题面均不重复此前题库。`scripts/verify_v3_holdout.py` 锁定题集 SHA-256 `fb91b7ebeb639c0b8e25c1fcf562419f3c3c2abd9e88d28a0608c8cb908b7212` 及同一数据清单哈希，生产 `QueryService` 已重算 **12/12** 个金标结果；行为 rubric 仍要人工审阅。先提交源码、题集和评分器，再按预定模型、预算及三次重复运行；运行后不按 v3 结果调参。开发回归与 v3 留出集分别报告完整分母、自动 SQL 结果、结构完成、人工审核、token 和延迟。
+修复 v2 已知问题后，新建 [`frozen_heldout_v3.jsonl`](../evals/frozen_heldout_v3.jsonl) 作独立检查：20 题，12 道数值题与 8 道行为题；ID 和完整题面均不重复此前题库。`scripts/verify_v3_holdout.py` 锁定题集 SHA-256 `fb91b7ebeb639c0b8e25c1fcf562419f3c3c2abd9e88d28a0608c8cb908b7212` 及同一数据清单哈希，生产 `QueryService` 已重算 **12/12** 个金标结果；行为 rubric 仍要人工审阅。源码和题集先以 Git `7cffd5e` 冻结，随后 Agent 与单轮基线各运行 60 次并分别无模型重评，完整分母、自动 SQL 结果、结构完成、token、延迟及失败诊断见 [`live_eval_report.md`](live_eval_report.md)。v3 结果没有用于改本版代码或金标；现已看到 H317/H320 失败，下一次修复只能把 v3 当已知回归，新的泛化声明需要下一份未见题集。
+
+## 第四份冻结留出集与 v3 已知题
+
+v3 的 H317/H320 复制到 [`regression_v3_failures.jsonl`](../evals/regression_v3_failures.jsonl)，用于验证缺少司机身份字段、现金纸币小费不可观测及拒答收敛；它们不再具有留出资格。当前问题边界还规定每个新用户问题需要新的 `run_sql` 结果，旧 query ID 仅保留为历史 Trace，不能为下一问题的数值结论背书。
+
+[`frozen_heldout_v4.jsonl`](../evals/frozen_heldout_v4.jsonl) 含 H401–H420，12 道数值题与 8 道行为题。题集 SHA-256 为 `820519222ac9ba3eb871bc12a28f50302d6ebfb4b3ec90636d00f8b4d414afd2`；数据清单 SHA-256 仍为 `48fbd0a206fe5f9a9b3fe756f1d739dd805b01985526e958c9e5a4897620225d`。`.venv/bin/python scripts/verify_v4_holdout.py` 已核对 ID、重复题面、数据快照及 **12/12** 个生产查询金标。H414/H417 仅在题面里声称存在上一轮授权或结果，当前逐题评测不建立真实多轮会话；其结果只能解释为伪造上下文防护样本。代码、评分器、题集在模型运行前一并提交；运行时 Agent 与同版本单轮基线各 20 题×3 次，保留失败和待审分母，报告通过原 Trace/预测无模型重评。运行后不根据 v4 结果调本版规则。

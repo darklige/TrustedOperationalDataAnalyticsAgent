@@ -83,7 +83,9 @@ async def test_loop_tools_evidence_and_replay(tmp_path):
     assert final_events[-2]["data"]["text"] == state.answer
     assert final_events[-1]["data"]["attempt_id"] == final_events[-2]["data"]["attempt_id"]
     next_state = await runner.run("再确认一次", run_id=state.run_id)
-    assert next_state.status == "completed"
+    # This scripted provider cites the first episode's SQL again. The new
+    # question cannot inherit its evidence, so it exhausts the test budget.
+    assert next_state.status == "budget_exceeded"
     replayed = store.replay(state.run_id)
     assert [item["content"] for item in replayed.history if item.get("role") == "user"] == [
         "有多少条行程？", "再确认一次"]
@@ -289,6 +291,7 @@ async def test_repeated_invalid_refusal_commits_claim_free_fallback(
     assert "[query_id:" not in state.answer
     assert trace_assertions(events, numeric=False) == []
     assert store.replay(state.run_id).answer == state.answer
+    assert store.replay(state.run_id).history == state.history
 
 
 @pytest.mark.asyncio
@@ -482,6 +485,56 @@ def test_clarification_question_word_is_not_a_numeric_claim():
     assert AgentRunner._answer_type("无法核实，但有一次行程。", []) is None
     assert AgentRunner._answer_type("数据仅覆盖 2025-01 至 2025-02，无法计算每月 1–7 日。", []) == "refusal"
     assert AgentRunner._answer_type("无法核实，但有一个订单。", []) is None
+
+
+@pytest.mark.parametrize("answer", [
+    "无法核实，但大约数十单。",
+    "无法核实，但一百来条。",
+    "无法核实，但几百条行程。",
+    "无法核实，但上百万单。",
+    "无法核实，但约有几单。",
+])
+def test_approximate_chinese_business_quantities_need_evidence(answer):
+    assert AgentRunner._answer_type(answer, []) is None
+
+
+class PriorCitationThenRefusalProvider:
+    def __init__(self, query_id):
+        self.query_id = query_id
+        self.calls = 0
+
+    async def summarize(self, items):
+        return "summary"
+
+    async def stream(self, messages, tools, instructions):
+        self.calls += 1
+        answer = (f"新问题有 3 条。[query_id:{self.query_id}]" if self.calls == 1
+                  else "无法核实新问题的数值结果。")
+        yield ProviderEvent("text_delta", {"text": answer})
+        yield ProviderEvent("completed", {"output": [{"type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": answer}]}], "usage": {}})
+
+
+@pytest.mark.asyncio
+async def test_follow_up_cannot_cite_prior_episode_sql(tmp_path):
+    store = EventStore(tmp_path / "state.db")
+    runner = AgentRunner(ScriptedProvider(), ToolRegistry(FakeQuery(), tmp_path), store)
+    first = await runner.run("第一问有多少行程？")
+    prior_id = next(e["data"]["result"]["query_id"] for e in store.events(first.run_id)
+                    if e["kind"] == "tool_finished" and e["data"]["name"] == "run_sql")
+    provider = PriorCitationThenRefusalProvider(prior_id)
+    runner.provider = provider
+    second = await runner.run("另一项新问题有多少行程？", run_id=first.run_id)
+    events = store.events(second.run_id)
+    last_start = max(i for i, event in enumerate(events) if event["kind"] == "run_started")
+    episode = events[last_start:]
+    assert provider.calls == 2
+    assert second.status == "completed"
+    assert second.stop_reason == "unverified_refusal"
+    assert prior_id not in second.answer
+    assert sum(event["kind"] == "answer_rejected" for event in episode) == 1
+    assert trace_assertions(episode, numeric=False) == []
+    assert store.replay(second.run_id).history == second.history
 
 
 class InterruptedTextProvider:

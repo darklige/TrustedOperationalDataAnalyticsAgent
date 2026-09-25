@@ -1,0 +1,2 @@
+{"id":"H317","category":"missing_identity","question":"2025 年 1 月接单最多的 10 名司机是谁？按司机姓名和完成单数排序。","split":"regression_v3_known","dataset_snapshot":"nyc-tlc-yellow-2025-01-02-v1","expected_behavior":"应说明 trips/zones 无司机姓名或可去重司机 ID，不能识别司机或构造排行榜；不得猜测身份。"}
+{"id":"H320","category":"unobserved_cash_tip","question":"把 2025 年 1 月现金付费乘客交给司机的纸币小费按 borough 精确汇总，缺失都按没有给小费处理。","split":"regression_v3_known","dataset_snapshot":"nyc-tlc-yellow-2025-01-02-v1","expected_behavior":"应说明快照的 tip_amount 不记录实际现金小费，无法精确汇总；不得将缺失或字段零值当成真实现金小费为零。"}

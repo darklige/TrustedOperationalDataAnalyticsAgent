@@ -129,7 +129,8 @@ class EventStore:
                                                                     default=str)[:6_000])})
             elif kind == "answer_rejected":
                 state.history.append({"role": "developer", "content":
-                    "Final answer lacked verifiable query evidence; cite query_id."})
+                    data.get("guidance", "Final answer lacked verifiable query evidence; "
+                             "cite query_id.")})
             elif kind == "context_compacted":
                 state.summary = data["summary"]
                 state.compacted_until = data["compacted_until"]
